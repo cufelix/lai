@@ -1,0 +1,340 @@
+"""Tests for lai.osl.apps.
+
+_parse_desktop_file and AppEntry are pure, file-based logic and are tested
+against real .desktop files written to tmp_path. The @pytest.mark.x11 test
+only reads the system's installed .desktop files — it never launches anything.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from lai.osl.apps import AppEntry, AppLauncher, _parse_desktop_file
+from lai.osl.windows import WindowManager
+
+# -- _parse_desktop_file ------------------------------------------------------
+
+
+def test_parse_normal_entry(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "foo.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Foo Editor
+Exec=/usr/bin/foo-editor %U
+Comment=Edits foos
+Categories=Utility;TextEditor;
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.id == "foo"
+    assert entry.name == "Foo Editor"
+    assert entry.exec_line == "/usr/bin/foo-editor %U"
+    assert entry.comment == "Edits foos"
+    assert entry.categories == ("Utility", "TextEditor")
+    assert entry.path == str(path)
+
+
+def test_parse_ignores_localized_name_keys(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "foo.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Foo Editor
+Name[cs]=Editor Foo
+Exec=/usr/bin/foo-editor
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.name == "Foo Editor"
+
+
+def test_parse_type_link_returns_none(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "link.desktop",
+        """[Desktop Entry]
+Type=Link
+Name=Some Website
+URL=https://example.com
+""",
+    )
+    assert _parse_desktop_file(path) is None
+
+
+def test_parse_missing_exec_returns_none(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "noexec.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=No Exec App
+""",
+    )
+    assert _parse_desktop_file(path) is None
+
+
+def test_parse_no_display_true_sets_no_display(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "hidden1.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Hidden App
+Exec=/usr/bin/hidden
+NoDisplay=true
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.no_display is True
+
+
+def test_parse_hidden_true_sets_no_display(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "hidden2.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Hidden App 2
+Exec=/usr/bin/hidden2
+Hidden=true
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.no_display is True
+
+
+def test_parse_no_display_and_hidden_default_false(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "visible.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Visible App
+Exec=/usr/bin/visible
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.no_display is False
+
+
+def test_parse_startup_wm_class_captured(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "wm.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=WM App
+Exec=/usr/bin/wm-app
+StartupWMClass=WmAppClass
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.wm_class == "WmAppClass"
+
+
+def test_parse_categories_split(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "cats.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Cats App
+Exec=/usr/bin/cats-app
+Categories=Graphics;Photography;2DGraphics;
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.categories == ("Graphics", "Photography", "2DGraphics")
+
+
+def test_parse_tolerates_comments_and_blank_lines(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "commented.desktop",
+        """# this is a leading comment
+[Desktop Entry]
+# another comment
+Type=Application
+
+Name=Commented App
+# comment between keys
+Exec=/usr/bin/commented-app
+
+Comment=Has comments and blanks
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.name == "Commented App"
+    assert entry.exec_line == "/usr/bin/commented-app"
+    assert entry.comment == "Has comments and blanks"
+
+
+def test_parse_second_group_terminates_parsing(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "twogroups.desktop",
+        """[Desktop Entry]
+Type=Application
+Name=Main App
+Exec=/usr/bin/main-app
+[Some Other Group]
+Comment=Should never be read
+Exec=/bin/should-not-be-used
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.name == "Main App"
+    assert entry.exec_line == "/usr/bin/main-app"
+    # Comment only appears after the second [group] header -> must be ignored.
+    assert entry.comment == ""
+
+
+def test_parse_missing_name_falls_back_to_stem(tmp_desktop_file):
+    path = tmp_desktop_file(
+        "stemname.desktop",
+        """[Desktop Entry]
+Type=Application
+Exec=/usr/bin/stemname
+""",
+    )
+    entry = _parse_desktop_file(path)
+    assert entry is not None
+    assert entry.name == "stemname"
+
+
+def test_parse_unreadable_path_returns_none(tmp_path):
+    missing = tmp_path / "does-not-exist.desktop"
+    assert _parse_desktop_file(missing) is None
+
+
+# -- AppEntry.command ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exec_line",
+    [
+        '/usr/bin/app --flag "quoted value" %U',
+        '/usr/bin/app --flag "quoted value" %f',
+        '/usr/bin/app --flag "quoted value" %F',
+        '/usr/bin/app --flag "quoted value" %i',
+        '/usr/bin/app --flag "quoted value" %c',
+    ],
+)
+def test_app_entry_command_strips_field_codes_and_splits_quoted_args(exec_line):
+    entry = AppEntry(id="app", name="App", exec_line=exec_line, path="/x/app.desktop")
+    assert entry.command == ["/usr/bin/app", "--flag", "quoted value"]
+
+
+def test_app_entry_command_strips_multiple_field_codes():
+    entry = AppEntry(
+        id="app",
+        name="App",
+        exec_line="/usr/bin/app %U %f %F %i %c --verbose",
+        path="/x/app.desktop",
+    )
+    assert entry.command == ["/usr/bin/app", "--verbose"]
+
+
+def test_app_entry_command_no_field_codes():
+    entry = AppEntry(id="app", name="App", exec_line="/usr/bin/app --flag", path="/x/app.desktop")
+    assert entry.command == ["/usr/bin/app", "--flag"]
+
+
+def test_app_entry_command_falls_back_to_plain_split_on_unbalanced_quotes():
+    entry = AppEntry(id="app", name="App", exec_line='/usr/bin/app "unterminated', path="/x")
+    # shlex.split raises ValueError on unbalanced quotes; command() must not raise.
+    assert entry.command == ["/usr/bin/app", '"unterminated']
+
+
+# -- AppEntry.score ------------------------------------------------------
+
+
+@pytest.fixture
+def firefox_entry():
+    return AppEntry(
+        id="firefox",
+        name="Firefox",
+        exec_line="/usr/bin/firefox %u",
+        path="/x/firefox.desktop",
+        comment="Browse the web",
+        wm_class="Firefox",
+    )
+
+
+def test_score_exact_name_match_is_100(firefox_entry):
+    assert firefox_entry.score("firefox") == 100.0
+    assert firefox_entry.score("Firefox") == 100.0  # case-insensitive
+
+
+def test_score_exact_wm_class_match_is_100(firefox_entry):
+    assert firefox_entry.score("Firefox") == 100.0
+
+
+def test_score_prefix_match(firefox_entry):
+    assert firefox_entry.score("fire") == 80.0
+
+
+def test_score_substring_match(firefox_entry):
+    # "refox" is a substring of "firefox" but not a prefix.
+    assert firefox_entry.score("refox") == 60.0
+
+
+def test_score_no_match_is_zero(firefox_entry):
+    assert firefox_entry.score("zzzznotfound") == 0.0
+
+
+def test_score_empty_query_is_zero(firefox_entry):
+    assert firefox_entry.score("") == 0.0
+    assert firefox_entry.score("   ") == 0.0
+
+
+# -- AppLauncher.find ordering (monkeypatched app list) ------------------------------------------------------
+
+
+def test_find_orders_by_score_descending(monkeypatch):
+    launcher = AppLauncher(window_manager=WindowManager())
+    exact = AppEntry(id="a-exact", name="Terminal", exec_line="/bin/a", path="/x/a")
+    prefix = AppEntry(id="b-prefix", name="Terminal Emulator", exec_line="/bin/b", path="/x/b")
+    substring = AppEntry(id="c-substring", name="My Terminal App", exec_line="/bin/c", path="/x/c")
+    no_match = AppEntry(id="d-none", name="Calculator", exec_line="/bin/d", path="/x/d")
+
+    monkeypatch.setattr(
+        launcher, "apps", lambda **kwargs: [no_match, substring, prefix, exact]
+    )
+
+    results = launcher.find("terminal")
+    assert [e.id for e in results] == ["a-exact", "b-prefix", "c-substring"]
+
+
+def test_find_respects_limit(monkeypatch):
+    launcher = AppLauncher(window_manager=WindowManager())
+    entries = [
+        AppEntry(id=f"term-{i}", name=f"Terminal {i}", exec_line=f"/bin/t{i}", path=f"/x/t{i}")
+        for i in range(5)
+    ]
+    monkeypatch.setattr(launcher, "apps", lambda **kwargs: entries)
+    results = launcher.find("terminal", limit=2)
+    assert len(results) == 2
+
+
+def test_find_one_raises_app_not_found_when_nothing_matches(monkeypatch):
+    from lai.errors import AppNotFound
+
+    launcher = AppLauncher(window_manager=WindowManager())
+    monkeypatch.setattr(launcher, "apps", lambda **kwargs: [])
+    with pytest.raises(AppNotFound):
+        launcher.find_one("nonexistent")
+
+
+# -- x11: real installed apps ------------------------------------------------------
+
+
+@pytest.mark.x11
+def test_apps_returns_non_empty_list_with_valid_entries():
+    launcher = AppLauncher(window_manager=WindowManager())
+    entries = launcher.apps()
+    assert len(entries) > 0
+    for entry in entries:
+        assert entry.name.strip() != ""
+        assert entry.exec_line.strip() != ""

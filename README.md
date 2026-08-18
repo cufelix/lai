@@ -1,0 +1,583 @@
+# LAI — a native OS agent for Linux
+
+**The desktop is the page.**
+
+The Claude Chrome extension gave an agent the browser. LAI gives it the whole
+operating system: it opens real applications, reads their interfaces, clicks
+their buttons, types into their fields, manages their windows, runs shell
+commands and works with files — autonomously, in a loop, until the task is done.
+
+It is not a screenshot-and-guess agent. LAI reads the **AT-SPI accessibility
+tree** — the desktop's equivalent of a DOM — so it knows there is a button
+literally named *Save* at exactly those coordinates, and can invoke it through
+the toolkit's own action API. Pixels are the fallback, not the plan.
+
+```
+$ lai do "Open the text editor, write a haiku about X11, save it to ~/haiku.txt"
+
+zai/glm-5.2 → Open the text editor, write a haiku about X11...
+────────────────────────────────────────────────────────────────
+▸ app_open {"name": "Text Editor"}
+  ✓ Opened 'Text Editor'. Window 'Unsaved Document 1' [Xed] after 0.6s.
+▸ ui_snapshot {}
+  ✓ 57 accessible element(s)
+▸ ui_type {"ref": 12, "text": "Pixels in a grid..."}
+  ✓ Set text via a11y_set_text
+▸ computer_key {"key": "ctrl+s"}
+  ✓ Pressed ctrl+s
+▸ ui_type {"name": "Name:", "text": "/home/felix/haiku.txt"}
+  ✓ Set text of the filename field
+▸ ui_click {"name": "Save"}
+  ✓ Clicked push button 'Save' via a11y_action
+▸ file_read {"path": "/home/felix/haiku.txt"}
+  ✓ Pixels in a grid...
+▸ task_complete
+────────────────────────────────────────────────────────────────
+✓ completed — 8 steps in 34s
+```
+
+---
+
+## Why it works
+
+Desktop agents fail for one reason: **bad grounding**. A model given only a
+screenshot has to guess where things are, and it guesses wrong constantly. LAI
+fuses four sources of truth:
+
+| Source | What it gives | Analogy |
+|---|---|---|
+| **AT-SPI tree** | Every widget with role, name, value, state, exact bounds | the DOM |
+| **Window tree** | Every window with title, class, pid, geometry, state | the tab list |
+| **Screen capture** | What it actually looks like | the rendered page |
+| **Process tree** | What is running, what a launch produced | — |
+| **OCR** | Text in apps that publish no a11y tree | the fallback |
+
+Actions follow the same priority. `ui_click(name="Save")` invokes the widget's
+own accessible action — deterministic, and it still works when the window moves.
+`computer_click(x, y)` is there for apps that publish nothing (Electron, games,
+VMs), not as the default.
+
+Every step runs **observe → act → verify**. The agent does not report success
+because it sent a click; it reports success after it re-read the state and saw
+the effect.
+
+---
+
+## Install
+
+Linux with **X11**, Python 3.10+. One line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cufelix/lai/main/packaging/bootstrap.sh | sh
+```
+
+It checks the machine, clones to `~/.local/share/lai`, installs the system
+packages, builds the virtualenv, turns on accessibility, puts `lai` on your
+`PATH`, and hands over to the setup wizard. Everything it changes is printed
+before it runs, and re-running it updates an existing install.
+
+```bash
+LAI_DIR=~/opt/lai  …| sh        # install somewhere else
+LAI_REF=v0.2       …| sh        # a tag or branch
+…| sh -s -- --no-setup          # stop before the wizard
+```
+
+Prefer to read it first? That is the better instinct:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/lai/main/packaging/bootstrap.sh -o lai-install.sh
+less lai-install.sh && sh lai-install.sh
+```
+
+Or clone and run the installer directly:
+
+```bash
+git clone https://github.com/OWNER/lai.git && cd lai && ./packaging/install.sh
+```
+
+### Setup
+
+```bash
+lai setup
+```
+
+Four steps, and it refuses to leave you with something that does not work:
+
+```
+LAI setup — a native agent for your Linux desktop
+Four steps. Nothing is changed without asking.
+
+1/4  Checking this machine
+  ✓ platform                 Linux 6.14.0 / Linux Mint 22.2
+  ✓ display server           x11 (DISPLAY=:0)
+  ✓ input (xdotool)          available
+  ✓ accessibility (AT-SPI)   28 app(s) registered, 57 element(s) in the focused window
+  ! OCR (tesseract)          missing — apps without an accessibility tree are harder to read
+    fix: sudo apt-get install -y tesseract-ocr
+    run it? [Y/n]
+
+2/4  Model backend
+  Which model backend?
+    1. Claude (Anthropic)  [console.anthropic.com/settings/keys]  (default)
+    2. GLM (z.ai)  [z.ai — API keys]
+    3. OpenAI  [platform.openai.com/api-keys]
+    4. OpenRouter (many models, one key)  [openrouter.ai/keys]
+    5. Ollama — runs locally, no key needed
+    6. Skip for now
+  Paste your Claude (Anthropic) key (it is not echoed):
+  verifying the key…
+  ✓ works  anthropic/claude-sonnet-4-5 replied 'OK'
+
+3/4  How much should it ask?
+  ✓ mode: ask
+
+4/4  First run
+  asking: what is on this desktop right now?
+  ✓ Seven windows are open (Firefox, two terminals, Chrome, Nemo, VS Code, Xviewer),
+    with the focused window being the maximized Google Chrome.
+  2 steps, 11s
+
+LAI is ready.
+```
+
+The key is **spent on a real request before it is saved**, so a typo is caught
+in the wizard rather than on your first real task. The config lands in
+`~/.lai/config.toml`, mode `0600`. Running `lai setup` again is safe: it keeps
+what is already there and changes only what you pick.
+
+`--yes` takes every default without asking (for scripted installs); `--no-demo`
+skips the first run.
+
+### If something is wrong
+
+```bash
+lai doctor        # what is broken, and the exact command that fixes each thing
+lai doctor --fix  # apply every automatic fix
+```
+
+Every failure carries its own repair — the diagnosis and the fix are the same
+code, so they cannot drift apart.
+
+### Model backends — bring whatever you already have
+
+LAI does not care where the thinking comes from. `lai models` shows every route
+this machine has:
+
+```
+$ lai models
+
+Ready now
+  zai            api   glm-5.2
+                 glm wrapper script (~/.local/bin/glm)
+  cli:claude     cli   claude
+                 claude CLI on PATH (sign-in not verified)
+  ollama         local qwen3-vl:2b
+                 serving 4 model(s): qwen3.5:2b, gemma4:latest, qwen:latest…
+
+…and 19 more — `lai models --all` to see them
+
+6 usable now, 25 known in total
+lai models test <name>   prove one works
+lai models use <name>    make it the default
+```
+
+**Three kinds of backend:**
+
+| Kind | What it is | Key needed |
+|---|---|---|
+| `api` | Anthropic, OpenAI, GLM/z.ai, OpenRouter, Gemini, Groq, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, Perplexity, Nebius, Moonshot, Qwen | yes |
+| `local` | Ollama, LM Studio, llama.cpp, vLLM, LiteLLM, Jan | no |
+| `cli` | **Claude Code, Codex, Gemini CLI, opencode** | no — it uses their login |
+
+That last row is the interesting one. If you already have Claude Code signed in
+on a subscription, or Codex on a ChatGPT plan, LAI can borrow it:
+
+```bash
+lai models use cli:claude
+lai do "open the calculator and work out 12 * 34"
+```
+
+```
+$ lai do "How many windows are open?" --provider cli:claude
+▸ window_list {}
+  ✓ 7 window(s) (* = focused)
+▸ task_complete
+✓ completed — 2 steps in 16s
+```
+
+No API key anywhere. And because someone's Claude Code might itself be pointed
+at Ollama or a proxy, this works for whatever *they* configured — LAI just asks
+the CLI.
+
+**Vision works too — through the filesystem.** These CLIs take no inline
+images, but they can *read a file*: each turn, LAI stages the newest
+screenshots to a temp dir, lists the paths in the prompt, and grants the CLI
+read access (`--allowedTools Read --add-dir` for claude, equivalents for the
+others). The model reads the screen the same way you would paste a screenshot
+into a chat — verified working, including identifying the focused window from
+a live capture. `codex` and `gemini` get the same treatment where their flags
+allow.
+
+**What you give up with a CLI backend**, stated plainly:
+
+- **Slower turns**, and the whole transcript is re-sent each time, because
+  these CLIs are stateless per invocation.
+- **No token accounting** — a CLI reports cost, not tokens, so LAI reports zero
+  rather than inventing a number.
+- Tool calling is emulated through a JSON protocol rather than native, so a
+  model that ignores the format costs a retry.
+
+An API key is still the better experience. The CLI route exists so that "I have
+no API key" is never the end of the conversation.
+
+### Without the wizard
+
+LAI auto-detects a backend. Any of these is enough:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...        # Anthropic
+export ZAI_API_KEY=...                     # GLM / z.ai
+export OPENAI_API_KEY=...                  # OpenAI
+export OPENROUTER_API_KEY=...              # OpenRouter — one key, most models
+export GROQ_API_KEY=...                    # …and a dozen more, see `lai models --all`
+ollama serve                               # fully local, no key
+claude / codex / gemini                    # already signed in? that works too
+```
+
+It also reads an existing `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` pair
+(any Anthropic-compatible gateway), and picks up a local `glm`-style wrapper
+script if you already have one. If a key is already in your environment,
+`lai setup` finds it and does not ask.
+
+---
+
+## Use
+
+```bash
+lai                             # setup if new, otherwise the full-screen interface
+lai do "<task>"                 # one autonomous run
+lai tui                         # the full-screen interface, explicitly
+lai repl                        # plain interactive session
+lai doctor                      # environment diagnostics
+lai observe                     # print exactly what the agent sees right now
+lai tools                       # list the 53 tools
+lai skills list|install|show    # manage skills
+lai sessions                    # replay past runs
+lai models                      # every backend this machine can use
+lai schedule                    # recurring tasks (run by the daemon)
+lai channels                    # remote connectors and who may use them
+lai serve                       # HTTP daemon with live event streaming
+lai mcp                         # expose the desktop over MCP (see below)
+```
+
+### The interface
+
+`lai tui` gives you the agent with its work visible next to it:
+
+```
+ LAI  zai/glm-5.2  ask  step 6  42s  4,102 tok
+┌────────────────────────────────────────┬──────────────────────────┐
+│ ▸ ui_snapshot                          │ PLAN                     │
+│   ✓ 57 accessible element(s)           │   ✓ open the editor      │
+│ ▸ ui_type ref=12 text='Dear Anna,'     │   → write the letter     │
+│   ✓ Set text via a11y_set_text         │     save as letter.txt   │
+│ ▸ computer_key key='ctrl+s'            │                          │
+│   ✓ Pressed ctrl+s                     ├──────────────────────────┤
+│                                        │ DESKTOP                  │
+│                                        │  focused                 │
+│                                        │   *Unsaved Document 1    │
+│                                        │   Xed  1920x1008         │
+│                                        │  windows (5)             │
+│                                        │  → Xed        Unsaved…   │
+│                                        │    firefox    Claude     │
+├────────────────────────────────────────┴──────────────────────────┤
+│ > Tell me what to do on this desktop…                             │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+Permission prompts appear as a modal where you are already looking — `y` allows,
+`n` refuses. `ctrl+c` interrupts, `f2` cycles permission mode, `f5` re-observes,
+`ctrl+n` starts a fresh session.
+
+Useful flags on `do` / `repl`: `--mode`, `--model`, `--provider`, `--steps`,
+`--timeout`, `--dry-run`, `--json`, `--verbose`.
+
+### Permission modes
+
+| Mode | Observe | Click / type | Write files, open apps | Shell, kill |
+|---|---|---|---|---|
+| `readonly` | ✓ | ✗ | ✗ | ✗ |
+| `ask` *(default)* | ✓ | ask | ask | ask |
+| `auto` | ✓ | ✓ | ✓ | ask |
+| `yolo` | ✓ | ✓ | ✓ | ✓ |
+
+Some things are refused in **every** mode, `yolo` included:
+
+- destructive shell patterns — `rm -rf`, `mkfs`, `dd if=`, `curl … | sh`, `shutdown`
+- sending input to password managers or authentication prompts
+  (KeePassXC, Bitwarden, 1Password, polkit dialogs, anything titled *password*)
+
+Every action is rate-limited, written to an append-only audit log at
+`~/.lai/logs/`, and passed through secret redaction before it is logged or sent
+to a model.
+
+---
+
+## Reach it from anywhere
+
+Connectors let the agent be driven from outside the machine it runs on.
+
+```bash
+export LAI_TELEGRAM_TOKEN=123456:AA...      # from @BotFather
+lai channels test telegram                   # verify the token
+lai serve --channels telegram                # prints a one-time pairing code
+```
+
+Then message the bot `/pair 041823`. From your phone:
+
+```
+you  open the text editor and write down today's meeting notes
+LAI  Working… step 3/25 · ui_type
+LAI  ✅ completed — 7 steps, 41s
+     Opened Xed, typed the notes, saved to ~/notes/2026-08-17.txt
+     Verified: re-read the file; contents match.
+```
+
+| Connector | Direction | Notes |
+|---|---|---|
+| `telegram` | two-way | long polling, no inbound port — works behind NAT |
+| `discord` | two-way | bot gateway with heartbeat + RESUME |
+| `webhook` | two-way | generic JSON; Slack- and Discord-webhook payload shapes |
+| `local` | in-process | scripting, embedding and tests |
+
+Chat commands: `/status` `/stop` `/new` `/screenshot` `/windows` `/skills`
+`/mode` `/whoami` `/help`, plus `/allow` `/revoke` `/who` for admins.
+
+**Access control.** The bot token is not the security boundary — the allowlist
+is. An unknown sender gets a flat `Not authorised.` with no hint that pairing
+exists. Pairing needs a six-digit code minted on your own terminal, single-use,
+15-minute expiry, five attempts. The first person to pair becomes admin; the
+allowlist is stored `0600` at `~/.lai/channels.json`.
+
+**Remote approvals.** In `ask` mode the permission prompt is delivered to the
+chat and the run blocks on your reply, so operating remotely does not force you
+into `yolo`:
+
+```
+LAI  ⚠️ Approval needed
+     shell_exec
+     command='git push origin main'
+     command needs confirmation (matched 'git push')
+     Reply /yes to allow or /no to refuse (expires in 180s).
+```
+
+---
+
+## Give Claude Code the desktop
+
+This is the shortest path from "Claude in the browser" to "Claude on the OS":
+
+```bash
+claude mcp add lai -- /path/to/lai/.venv/bin/lai mcp
+```
+
+Claude Code now has all 53 desktop tools — `app_open`, `ui_snapshot`,
+`ui_click`, `window_focus`, `computer_screenshot`, and the rest — driving your
+real machine, with LAI's safety gate still in force.
+
+Set `LAI_MODE=auto` for the MCP server, since an MCP client cannot answer
+interactive approval prompts.
+
+---
+
+## What it can do
+
+53 native tools, in families:
+
+| Family | Tools | For |
+|---|---|---|
+| `ui` | snapshot, find, click, type, focus, read, wait_for | semantic control through the a11y tree — the primary path |
+| `computer` | screenshot, click, move, drag, scroll, type, key, cursor | pixel fallback for apps with no a11y tree |
+| `window` | list, focus, close, arrange | window management |
+| `app` | list, open, close | launch-and-wait-for-window |
+| `perception` | ocr_read, ocr_find, notify_user, notifications_recent, user_idle, workspace_* , record_start/stop | reading pixels, watching notifications, knowing whether the human is present, virtual desktops, screen recording |
+| `agentic` | memory_save/search/forget, delegate, schedule_* | learning across sessions, isolated subtasks, recurring runs |
+| `system` | shell_exec, file_read/write/list, clipboard_read/write | non-GUI work |
+| `skill` | list, load, install | procedures, including installing new ones mid-task |
+| `control` | plan_update, task_complete, task_blocked | planning and explicit termination |
+
+Three of these are worth calling out:
+
+- **Memory** — `~/.lai/memory.db` (SQLite, FTS5 where available). The agent
+  records what it learns about your applications — *"Xed's save dialog names its
+  field `Name:`"* — so the next session does not rediscover it.
+- **`delegate`** — runs a self-contained subtask in a fresh context with its own
+  step budget and returns only the conclusion. Depth-capped at 2, and it cannot
+  escape the parent's safety gate.
+- **`user_idle`** — an autonomous agent should not fight you for the mouse. It
+  can check whether you are actually at the keyboard before taking over.
+
+**Scheduling.** `schedule_task` accepts standard 5-field cron (`*`, lists,
+ranges, `*/n`, `@hourly`/`@daily`/`@weekly`/`@monthly`) or `every:<seconds>`.
+The daemon runs due tasks, skips them while a user-initiated run is in flight,
+and pushes the result to your connectors. Manage them from the shell too:
+
+```bash
+lai schedule add nightly "@daily" "summarise today's notes into ~/journal"
+lai schedule list                # what is scheduled, when each is next due
+lai schedule run <id>            # fire one now, ignoring its schedule
+lai schedule disable <id>        # keep it, stop it firing
+```
+
+**One desktop, one agent.** The HTTP API, the connectors and the scheduler all
+claim the same gate before they start, so a chat message arriving mid-task is
+refused with an explanation rather than fighting the running agent for the
+mouse.
+
+**OCR** needs `sudo apt install tesseract-ocr`. Without it, `ocr_*` report
+cleanly that they are unavailable and everything else keeps working — the same
+pattern as every other optional dependency here.
+
+---
+
+## Skills
+
+LAI reads **Claude Code's skill format**, unchanged. Any `SKILL.md` with
+frontmatter is a skill:
+
+```markdown
+---
+name: invoice-filing
+description: Use when filing a PDF invoice into the accounting folder
+---
+1. Open the PDF in the document viewer …
+```
+
+Discovered from `~/.lai/skills`, `./.lai/skills`, `./.claude/skills`,
+`~/.claude/skills` and `~/.openclaw/skills`. Names and descriptions go into the
+system prompt; the body loads on demand via `skill_load` — so a hundred skills
+cost almost nothing until one is actually used.
+
+Install from anywhere:
+
+```bash
+lai skills install owner/repo               # GitHub
+lai skills install https://…/skills.git     # any git URL
+lai skills install https://…/skill.zip      # archive
+lai skills install ./my-skill               # local
+```
+
+The agent can also install a skill mid-task when it finds it lacks a capability.
+
+## MCP tools
+
+LAI is an MCP **client** too. It reads `~/.lai/mcp.json`, `./.mcp.json` and
+Claude Code's own MCP config, connects to each server, and registers their tools
+as `mcp__<server>__<tool>` — so anything reachable over MCP becomes something
+the desktop agent can do.
+
+---
+
+## HTTP daemon
+
+```bash
+lai serve                       # 127.0.0.1:8787, bearer token at ~/.lai/daemon.token
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | liveness (no auth) |
+| `GET /status` | provider, tools, skills, current task |
+| `GET /observe` | what the agent sees now |
+| `GET /tools` `GET /skills` `GET /sessions` | inventories |
+| `POST /task` | run a task — Server-Sent Events stream by default |
+| `POST /stop` | interrupt the running task |
+
+```bash
+TOKEN=$(cat ~/.lai/daemon.token)
+curl -sN -H "Authorization: Bearer $TOKEN" \
+     -d '{"task":"open the calculator","mode":"auto"}' \
+     http://127.0.0.1:8787/task
+```
+
+It refuses to bind a non-loopback address without `--allow-remote`. This API
+controls your desktop; treat the token like a password.
+
+---
+
+## Architecture
+
+```
+lai/
+├── osl/          OS layer — the hard part
+│   ├── a11y.py       AT-SPI tree: the desktop's DOM
+│   ├── windows.py    EWMH window management via python-xlib
+│   ├── screen.py     multi-monitor capture + coordinate mapping
+│   ├── inputs.py     mouse/keyboard via xdotool (XTEST)
+│   ├── apps.py       .desktop index, launch-and-wait-for-window
+│   ├── clipboard.py  GTK clipboard
+│   └── desktop.py    the facade: semantic-first, pixels-as-fallback
+├── tools/        53 tools with JSON schemas, one safety choke point
+├── agent/        the loop, 5 providers, sessions, compaction, prompt
+├── skills/       discovery, progressive disclosure, install-from-internet
+├── channels/     telegram · discord · webhook · local, with pairing + allowlist
+├── tui/          full-screen textual interface
+├── mcp/          client (consume) and server (expose)
+├── scheduler.py  hand-rolled cron, task store, background runner
+├── safety/       permission policy, redaction, audit log
+├── daemon/       HTTP + SSE service
+├── config.py     file + env + defaults, immutable
+└── cli.py
+```
+
+Design decisions worth knowing:
+
+- **Immutable config.** Policy cannot be mutated mid-run.
+- **One dispatch path.** Every tool call goes through `ToolRegistry.call`, which
+  is where permission checks, validation, auditing and error containment live.
+  No tool can bypass the gate by accident.
+- **Perception never crashes the loop.** Every observation degrades to `None`
+  rather than raising; a dead app mid-walk is normal, not exceptional.
+- **Explicit termination.** The agent finishes by calling `task_complete` with a
+  verification statement, not by trailing off. Budget exhaustion, blocking and
+  errors are reported as themselves, never dressed up as success.
+- **Screenshots are pruned.** Only the newest few survive in context; older ones
+  become placeholders. Context compaction summarises via the model and refuses
+  to cut at a point that would orphan a `tool_result`.
+
+---
+
+## Limitations
+
+- **X11 only.** Wayland needs portal-based capture and libei input; the backend
+  interface is there, the implementation is not.
+- **Chromium and Electron publish no accessibility tree** unless started with
+  `--force-renderer-accessibility`. Without it, LAI falls back to screenshots
+  and coordinates in those apps — it works, just less precisely.
+- **OCR needs tesseract installed**; without it, a11y-less apps are only as
+  readable as the model's vision.
+- Vision quality depends on the model. GLM and Claude both work; small local
+  models struggle with dense UIs.
+
+---
+
+## Development
+
+```bash
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -q          # 1063 tests
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -q -m "not slow and not x11"   # no display needed
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -q --cov=src/lai --cov-report=term   # 81%
+.venv/bin/ruff check src/ tests/                             # clean
+.venv/bin/bandit -q -r src/lai                               # 5 documented false positives
+```
+
+The ruff config in `pyproject.toml` encodes this codebase's deliberate choices
+rather than fighting them — blind `except Exception` at subsystem boundaries is
+the degradation strategy, local imports are how optional dependencies stay
+optional, and the cron engine is local-time on purpose. Everything else is
+enforced.
+
+`x11`-marked tests drive the real display. They only ever touch windows they
+launched themselves and always clean up.
+
+See `docs/FEATURES.md` for the full feature catalogue and what is planned next.

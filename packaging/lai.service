@@ -1,0 +1,23 @@
+[Unit]
+Description=LAI — native desktop agent daemon
+Documentation=https://github.com/felix/lai
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# The daemon drives the X session, so it must inherit it.
+Environment=DISPLAY=:0
+Environment=LAI_MODE=ask
+ExecStart=%h/projects/lai/.venv/bin/lai serve --port 8787
+Restart=on-failure
+RestartSec=5
+# Least privilege: no new privileges, private tmp, read-only system paths.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-write
+ReadWritePaths=%h/.lai
+
+[Install]
+WantedBy=graphical-session.target

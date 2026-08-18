@@ -1,0 +1,362 @@
+"""Configuration: file, environment and defaults.
+
+Precedence (highest first): explicit kwargs → environment (``LAI_*``) →
+``~/.lai/config.toml`` → built-in defaults. Config is immutable once built, so
+nothing can mutate policy mid-run.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
+
+from .errors import ConfigError
+
+DEFAULT_HOME = Path(os.environ.get("LAI_HOME", Path.home() / ".lai"))
+CONFIG_FILENAME = "config.toml"
+
+# Where skills are discovered, in priority order. Claude Code's directories are
+# included on purpose: skills written for Claude Code work here unchanged.
+DEFAULT_SKILL_PATHS: tuple[str, ...] = (
+    "{home}/skills",
+    "{cwd}/.lai/skills",
+    "{cwd}/.claude/skills",
+    "~/.claude/skills",
+    "~/.openclaw/skills",
+)
+
+PERMISSION_MODES = ("readonly", "ask", "auto", "yolo")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderConfig:
+    """Which model answers, and how we reach it."""
+
+    name: str = "auto"
+    """anthropic | zai | openai | claude_cli | ollama | auto"""
+    model: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    max_tokens: int = 8192
+    temperature: float = 1.0
+    thinking_budget: int = 0
+    timeout: float = 180.0
+
+    def redacted(self) -> dict:
+        return {
+            "name": self.name,
+            "model": self.model,
+            "base_url": self.base_url,
+            "api_key": ("set" if self.api_key else "unset"),
+            "max_tokens": self.max_tokens,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SafetyConfig:
+    mode: str = "ask"
+    """readonly (no side effects) | ask (confirm risky) | auto (allow known-safe) | yolo"""
+    allow_tools: tuple[str, ...] = ()
+    deny_tools: tuple[str, ...] = ()
+    protected_apps: tuple[str, ...] = (
+        "keepassxc", "bitwarden", "1password", "keepass", "seahorse", "gnome-keyring",
+        "polkit", "gnome-disks", "gparted",
+    )
+    protected_titles: tuple[str, ...] = (
+        "password", "authentication required", "unlock", "sudo", "polkit", "private browsing",
+    )
+    deny_shell_patterns: tuple[str, ...] = (
+        r"\brm\s+-[a-z]*[rf]", r"\bmkfs\b", r"\bdd\s+if=", r":\(\)\s*\{.*\};:",
+        r"\bshutdown\b", r"\breboot\b", r"\bpoweroff\b", r"\bhalt\b",
+        r">\s*/dev/sd[a-z]", r"\bchmod\s+-R\s+777\s+/", r"\buserdel\b", r"\bpasswd\b",
+        r"curl[^|]*\|\s*(ba)?sh", r"wget[^|]*\|\s*(ba)?sh", r"\bgit\s+push\s+--force",
+        r"\bfdisk\b", r"\bparted\b", r"\bcryptsetup\b",
+    )
+    confirm_shell_patterns: tuple[str, ...] = (
+        r"\bsudo\b", r"\bapt(-get)?\s+(install|remove|purge)", r"\bpip\s+install",
+        r"\bnpm\s+(install|publish)", r"\bsystemctl\b", r"\bkill(all)?\b",
+        r"\bgit\s+(push|reset\s+--hard)", r"\bdocker\b", r"\bsnap\s+(install|remove)",
+    )
+    max_actions_per_minute: int = 240
+    dry_run: bool = False
+    redact_secrets: bool = True
+
+    def __post_init__(self) -> None:
+        if self.mode not in PERMISSION_MODES:
+            raise ConfigError(
+                f"safety.mode must be one of {PERMISSION_MODES}, got {self.mode!r}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopConfig:
+    max_edge: int = 1400
+    a11y_timeout_ms: int = 800
+    max_elements: int = 220
+    settle_timeout: float = 3.0
+    annotate_screenshots: bool = False
+    display: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelsConfig:
+    """Remote connectors — Telegram, webhooks and friends.
+
+    Off by default: a channel is a remote control for the desktop, so it has to
+    be turned on deliberately.
+    """
+
+    enabled: tuple[str, ...] = ()
+    open_access: bool = False
+    """Accept anyone who messages the bot. Only ever for a throwaway sandbox."""
+    telegram_token: str = ""
+    discord_token: str = ""
+    webhook_url: str = ""
+    webhook_secret: str = ""
+    webhook_style: str = "json"
+    approval_timeout: float = 180.0
+
+    def redacted(self) -> dict:
+        return {
+            "enabled": list(self.enabled),
+            "open_access": self.open_access,
+            "telegram_token": "set" if self.telegram_token else "unset",
+            "discord_token": "set" if self.discord_token else "unset",
+            "webhook_url": self.webhook_url,
+            "webhook_secret": "set" if self.webhook_secret else "unset",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LimitsConfig:
+    max_steps: int = 60
+    max_seconds: float = 1800.0
+    max_tokens: int = 600_000
+    max_tool_output_chars: int = 20_000
+    max_consecutive_errors: int = 6
+
+
+@dataclass(frozen=True, slots=True)
+class Config:
+    home: Path = DEFAULT_HOME
+    provider: ProviderConfig = field(default_factory=ProviderConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
+    desktop: DesktopConfig = field(default_factory=DesktopConfig)
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
+    channels: ChannelsConfig = field(default_factory=ChannelsConfig)
+    skill_paths: tuple[str, ...] = DEFAULT_SKILL_PATHS
+    mcp_config_paths: tuple[str, ...] = (
+        "{home}/mcp.json", "{cwd}/.mcp.json", "~/.claude/mcp-configs/mcp-servers.json",
+    )
+    log_level: str = "info"
+
+    # -- derived paths ---------------------------------------------------
+
+    @property
+    def sessions_dir(self) -> Path:
+        return self.home / "sessions"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.home / "logs"
+
+    @property
+    def skills_dir(self) -> Path:
+        return self.home / "skills"
+
+    @property
+    def artifacts_dir(self) -> Path:
+        return self.home / "artifacts"
+
+    @property
+    def channels_file(self) -> Path:
+        return self.home / "channels.json"
+
+    @property
+    def memory_file(self) -> Path:
+        return self.home / "memory.db"
+
+    @property
+    def schedule_file(self) -> Path:
+        return self.home / "schedule.json"
+
+    def ensure_dirs(self) -> None:
+        for path in (self.home, self.sessions_dir, self.logs_dir, self.skills_dir, self.artifacts_dir):
+            path.mkdir(parents=True, exist_ok=True)
+
+    def resolved_skill_paths(self, cwd: Path | None = None) -> list[Path]:
+        return _resolve_paths(self.skill_paths, self.home, cwd)
+
+    def resolved_mcp_paths(self, cwd: Path | None = None) -> list[Path]:
+        return _resolve_paths(self.mcp_config_paths, self.home, cwd)
+
+    def with_overrides(self, **kwargs: Any) -> Config:
+        return replace(self, **kwargs)
+
+    def redacted(self) -> dict:
+        return {
+            "home": str(self.home),
+            "provider": self.provider.redacted(),
+            "safety": {"mode": self.safety.mode, "dry_run": self.safety.dry_run},
+            "channels": self.channels.redacted(),
+            "desktop": {"max_edge": self.desktop.max_edge, "max_elements": self.desktop.max_elements},
+            "limits": {"max_steps": self.limits.max_steps, "max_seconds": self.limits.max_seconds},
+        }
+
+
+def _resolve_paths(patterns: tuple[str, ...], home: Path, cwd: Path | None) -> list[Path]:
+    base = cwd or Path.cwd()
+    out: list[Path] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        raw = pattern.format(home=str(home), cwd=str(base))
+        path = Path(raw).expanduser()
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
+def _load_toml(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        import tomllib  # noqa: PLC0415 - py3.11+
+    except ImportError:  # pragma: no cover - py3.10
+        try:
+            import tomli as tomllib  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            raise ConfigError(
+                "reading config.toml needs Python 3.11+ or the 'tomli' package"
+            ) from None
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except Exception as exc:
+        raise ConfigError(f"cannot parse {path}", detail=str(exc)) from exc
+
+
+def _section(data: dict, name: str) -> dict:
+    value = data.get(name, {})
+    if not isinstance(value, dict):
+        raise ConfigError(f"config section [{name}] must be a table")
+    return value
+
+
+def _tuple(value: Any, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return fallback
+    if isinstance(value, str):
+        return tuple(v.strip() for v in value.split(",") if v.strip())
+    if isinstance(value, (list, tuple)):
+        return tuple(str(v) for v in value)
+    raise ConfigError(f"expected a list or comma-separated string, got {type(value).__name__}")
+
+
+def load_config(
+    path: Path | None = None, *, cwd: Path | None = None, overrides: dict | None = None
+) -> Config:
+    """Build the effective config from file + environment + overrides."""
+    home = Path(os.environ.get("LAI_HOME", str(DEFAULT_HOME))).expanduser()
+    config_path = path or (home / CONFIG_FILENAME)
+    data = _load_toml(config_path)
+
+    provider_data = _section(data, "provider")
+    safety_data = _section(data, "safety")
+    desktop_data = _section(data, "desktop")
+    limits_data = _section(data, "limits")
+    channels_data = _section(data, "channels")
+
+    env = os.environ
+    provider = ProviderConfig(
+        name=env.get("LAI_PROVIDER", provider_data.get("name", "auto")),
+        model=env.get("LAI_MODEL", provider_data.get("model", "")),
+        base_url=env.get("LAI_BASE_URL", provider_data.get("base_url", "")),
+        api_key=env.get("LAI_API_KEY", provider_data.get("api_key", "")),
+        max_tokens=int(env.get("LAI_MAX_TOKENS", provider_data.get("max_tokens", 8192))),
+        temperature=float(provider_data.get("temperature", 1.0)),
+        thinking_budget=int(env.get("LAI_THINKING", provider_data.get("thinking_budget", 0))),
+        timeout=float(provider_data.get("timeout", 180.0)),
+    )
+
+    safety = SafetyConfig(
+        mode=env.get("LAI_MODE", safety_data.get("mode", "ask")),
+        allow_tools=_tuple(safety_data.get("allow_tools"), ()),
+        deny_tools=_tuple(safety_data.get("deny_tools"), ()),
+        protected_apps=_tuple(
+            safety_data.get("protected_apps"), _SAFETY_DEFAULTS.protected_apps
+        ),
+        protected_titles=_tuple(
+            safety_data.get("protected_titles"), _SAFETY_DEFAULTS.protected_titles
+        ),
+        deny_shell_patterns=_tuple(
+            safety_data.get("deny_shell_patterns"), _SAFETY_DEFAULTS.deny_shell_patterns
+        ),
+        confirm_shell_patterns=_tuple(
+            safety_data.get("confirm_shell_patterns"), _SAFETY_DEFAULTS.confirm_shell_patterns
+        ),
+        max_actions_per_minute=int(safety_data.get("max_actions_per_minute", 240)),
+        dry_run=_bool(env.get("LAI_DRY_RUN"), safety_data.get("dry_run", False)),
+        redact_secrets=bool(safety_data.get("redact_secrets", True)),
+    )
+
+    desktop = DesktopConfig(
+        max_edge=int(env.get("LAI_MAX_EDGE", desktop_data.get("max_edge", 1400))),
+        a11y_timeout_ms=int(desktop_data.get("a11y_timeout_ms", 800)),
+        max_elements=int(desktop_data.get("max_elements", 220)),
+        settle_timeout=float(desktop_data.get("settle_timeout", 3.0)),
+        annotate_screenshots=bool(desktop_data.get("annotate_screenshots", False)),
+        display=env.get("LAI_DISPLAY", desktop_data.get("display", "")),
+    )
+
+    limits = LimitsConfig(
+        max_steps=int(env.get("LAI_MAX_STEPS", limits_data.get("max_steps", 60))),
+        max_seconds=float(env.get("LAI_MAX_SECONDS", limits_data.get("max_seconds", 1800.0))),
+        max_tokens=int(limits_data.get("max_tokens", 600_000)),
+        max_tool_output_chars=int(limits_data.get("max_tool_output_chars", 20_000)),
+        max_consecutive_errors=int(limits_data.get("max_consecutive_errors", 6)),
+    )
+
+    telegram_data = _section(channels_data, "telegram")
+    discord_data = _section(channels_data, "discord")
+    webhook_data = _section(channels_data, "webhook")
+    channels = ChannelsConfig(
+        enabled=_tuple(env.get("LAI_CHANNELS") or channels_data.get("enabled"), ()),
+        open_access=_bool(env.get("LAI_CHANNELS_OPEN"), channels_data.get("open_access", False)),
+        telegram_token=env.get("LAI_TELEGRAM_TOKEN", telegram_data.get("token", "")),
+        discord_token=env.get("LAI_DISCORD_TOKEN", discord_data.get("token", "")),
+        webhook_url=env.get("LAI_WEBHOOK_URL", webhook_data.get("url", "")),
+        webhook_secret=env.get("LAI_WEBHOOK_SECRET", webhook_data.get("secret", "")),
+        webhook_style=str(webhook_data.get("style", "json")),
+        approval_timeout=float(channels_data.get("approval_timeout", 180.0)),
+    )
+
+    config = Config(
+        home=home,
+        provider=provider,
+        safety=safety,
+        desktop=desktop,
+        limits=limits,
+        channels=channels,
+        skill_paths=_tuple(data.get("skill_paths"), DEFAULT_SKILL_PATHS),
+        mcp_config_paths=_tuple(data.get("mcp_config_paths"), _CONFIG_DEFAULTS.mcp_config_paths),
+        log_level=env.get("LAI_LOG_LEVEL", data.get("log_level", "info")),
+    )
+    if overrides:
+        config = config.with_overrides(**overrides)
+    return config
+
+
+# With slots=True, class attributes are member descriptors rather than the
+# default values, so defaults must be read from a real instance.
+_SAFETY_DEFAULTS = SafetyConfig()
+_CONFIG_DEFAULTS = Config()
+
+
+def _bool(env_value: str | None, fallback: bool) -> bool:
+    if env_value is None:
+        return bool(fallback)
+    return env_value.strip().lower() in ("1", "true", "yes", "on")

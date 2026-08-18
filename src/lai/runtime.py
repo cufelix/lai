@@ -1,0 +1,235 @@
+"""Runtime assembly — wires config, OS layer, safety, tools, skills and provider.
+
+One place builds the whole object graph so the CLI, the daemon and the MCP
+server all get identical behaviour. Optional pieces (MCP servers, a model
+provider) degrade to absent rather than failing the whole runtime: `lai doctor`
+must still work on a machine with no API key.
+"""
+
+from __future__ import annotations
+
+import warnings
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .agent.loop import Agent
+from .agent.providers.base import Provider
+from .agent.providers.registry import build_provider
+from .agent.session import Session
+from .config import Config, load_config
+from .errors import LaiError, ProviderError
+from .osl.desktop import Desktop
+from .safety.audit import AuditLog
+from .safety.policy import PolicyEngine
+from .skills.registry import SkillRegistry
+from .skills.tools import register as register_skill_tools
+from .tools import build_registry
+from .tools.base import ToolRegistry
+from .tools.control import register as register_control_tools
+
+
+@dataclass(slots=True)
+class Runtime:
+    """Everything an agent needs, assembled and ready."""
+
+    config: Config
+    desktop: Desktop
+    policy: PolicyEngine
+    audit: AuditLog
+    registry: ToolRegistry
+    skills: SkillRegistry
+    provider: Provider | None = None
+    provider_error: str = ""
+    mcp_pool: object | None = None
+    mcp_tools: list[str] = field(default_factory=list)
+    mcp_errors: dict = field(default_factory=dict)
+    cwd: Path = field(default_factory=Path.cwd)
+    memory: object | None = None
+    scheduler: object | None = None
+    task_store: object | None = None
+    extra: dict = field(default_factory=dict)
+
+    def agent(
+        self,
+        *,
+        session: Session | None = None,
+        approver: Callable | None = None,
+        on_event: Callable | None = None,
+        system_extra: str = "",
+    ) -> Agent:
+        if self.provider is None:
+            raise ProviderError(
+                "no model provider available",
+                detail=self.provider_error or "run `lai setup` to add one",
+            )
+        session = session or Session()
+        if self.config.sessions_dir:
+            session.bind(self.config.sessions_dir)
+        agent = Agent(
+            config=self.config,
+            provider=self.provider,
+            registry=self.registry,
+            desktop=self.desktop,
+            policy=self.policy,
+            audit=self.audit,
+            skills=self.skills,
+            session=session,
+            approver=approver,
+            on_event=on_event,
+            cwd=self.cwd,
+            system_extra=system_extra,
+        )
+        # Shared, long-lived services the tools reach through ToolContext.extra.
+        # `agent` is set last so `delegate` can spawn a child of this very run.
+        agent.tool_extra = {
+            **self.extra,
+            "memory_store": self.memory,
+            "task_store": self.task_store,
+            "scheduler": self.scheduler,
+            "agent": agent,
+        }
+        return agent
+
+    def close(self) -> None:
+        for closer in (
+            getattr(self.scheduler, "stop", None),
+            getattr(self.memory, "close", None),
+            getattr(self.mcp_pool, "close_all", None),
+            getattr(self.provider, "close", None),
+            self.desktop.close,
+        ):
+            if closer is None:
+                continue
+            try:
+                closer()
+            except Exception:
+                continue
+
+
+def build_runtime(
+    config: Config | None = None,
+    *,
+    cwd: Path | None = None,
+    with_provider: bool = True,
+    with_mcp: bool = True,
+    groups: set[str] | None = None,
+    session_id: str = "",
+    audit_echo: Callable | None = None,
+) -> Runtime:
+    """Assemble a Runtime. Never raises for a missing optional dependency."""
+    config = config or load_config(cwd=cwd)
+    config.ensure_dirs()
+    work_dir = Path(cwd or Path.cwd())
+
+    desktop = Desktop(
+        max_edge=config.desktop.max_edge,
+        a11y_timeout_ms=config.desktop.a11y_timeout_ms,
+        display=config.desktop.display or None,
+    )
+
+    policy = PolicyEngine(
+        config.safety,
+        focus_provider=lambda: _safe_active_window(desktop),
+    )
+    audit = AuditLog.for_session(
+        config.logs_dir,
+        session_id or "cli",
+        redact=config.safety.redact_secrets,
+        echo=audit_echo,
+    )
+
+    registry = build_registry(policy=policy, groups=groups)
+    register_control_tools(registry)
+    register_skill_tools(registry)
+
+    skills = SkillRegistry(config.resolved_skill_paths(work_dir))
+
+    provider: Provider | None = None
+    provider_error = ""
+    if with_provider:
+        try:
+            provider = build_provider(config.provider)
+        except LaiError as exc:
+            provider_error = str(exc)
+
+    memory = _open_memory(config)
+    task_store = _open_task_store(config)
+
+    mcp_pool = None
+    mcp_tools: list[str] = []
+    mcp_errors: dict = {}
+    if with_mcp:
+        mcp_pool, mcp_tools, mcp_errors = _attach_mcp(config, registry, work_dir)
+
+    return Runtime(
+        config=config,
+        desktop=desktop,
+        policy=policy,
+        audit=audit,
+        registry=registry,
+        skills=skills,
+        provider=provider,
+        provider_error=provider_error,
+        mcp_pool=mcp_pool,
+        mcp_tools=mcp_tools,
+        mcp_errors=mcp_errors,
+        cwd=work_dir,
+        memory=memory,
+        task_store=task_store,
+    )
+
+
+def _attach_mcp(config: Config, registry: ToolRegistry, cwd: Path):
+    """Connect configured MCP servers and register their tools.
+
+    Entirely optional: a broken or missing MCP server must never stop LAI from
+    controlling the desktop.
+    """
+    try:
+        from .mcp.client import MCPPool, load_mcp_configs, register_mcp_tools  # noqa: PLC0415
+    except Exception:
+        return None, [], {}
+
+    try:
+        servers = [s for s in load_mcp_configs(config, cwd) if getattr(s, "enabled", True)]
+    except Exception as exc:
+        return None, [], {"_load": str(exc)}
+    if not servers:
+        return None, [], {}
+
+    try:
+        pool = MCPPool(servers)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pool.connect_all()
+        names = register_mcp_tools(registry, pool)
+        return pool, list(names), dict(getattr(pool, "errors", {}) or {})
+    except Exception as exc:
+        return None, [], {"_connect": str(exc)}
+
+
+def _open_memory(config: Config):
+    """Long-term memory is optional: a broken database must not stop the agent."""
+    try:
+        from .agent.memory import MemoryStore  # noqa: PLC0415
+
+        return MemoryStore(config.memory_file)
+    except Exception:
+        return None
+
+
+def _open_task_store(config: Config):
+    try:
+        from .scheduler import TaskStore  # noqa: PLC0415
+
+        return TaskStore(config.schedule_file)
+    except Exception:
+        return None
+
+
+def _safe_active_window(desktop: Desktop):
+    try:
+        return desktop.windows.active_window()
+    except Exception:
+        return None
