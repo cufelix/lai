@@ -301,8 +301,7 @@ class WindowManager:
             [flags, bounds.x, bounds.y, bounds.width, bounds.height],
         )
         self._conn().flush()
-        time.sleep(0.12)
-        return self.get(window_id)
+        return self.settle(window_id)
 
     def set_state(self, window_id: int, state: str, enabled: bool | None = None) -> WindowInfo:
         if state == "maximized":
@@ -318,8 +317,27 @@ class WindowManager:
         self._client_message(
             self._window(window_id), "_NET_WM_STATE", [action, *atoms[:2], _SOURCE_APP]
         )
-        time.sleep(0.12)
-        return self.get(window_id)
+        return self.settle(window_id)
+
+    def settle(self, window_id: int, *, timeout: float = 1.2, poll: float = 0.06) -> WindowInfo:
+        """Wait until a window stops moving, then report where it ended up.
+
+        A window manager animates: it acknowledges a resize immediately and
+        finishes it a few frames later. Returning the geometry from the middle
+        of that is how an agent reads a half-changed window — the accessibility
+        tree is briefly inconsistent too, so the next `ui_click` misses.
+        Two identical readings in a row means the motion is over.
+        """
+        deadline = time.monotonic() + timeout
+        previous = None
+        while True:
+            time.sleep(poll)
+            current = self.get(window_id)
+            if previous is not None and current.bounds == previous.bounds and current.states == previous.states:
+                return current
+            if time.monotonic() >= deadline:
+                return current
+            previous = current
 
     def minimize(self, window_id: int) -> None:
         # WM_CHANGE_STATE with IconicState(3) is the portable way to iconify.
@@ -399,8 +417,7 @@ class WindowManager:
         self._validate_workspace_index(index)
         self._client_message(self._window(window_id), "_NET_WM_DESKTOP", [int(index), _SOURCE_APP])
         self._conn().flush()
-        time.sleep(0.12)
-        return self.get(window_id)
+        return self.settle(window_id)
 
 
 def _decode(value) -> str:

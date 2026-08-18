@@ -47,6 +47,7 @@ class Runtime:
     cwd: Path = field(default_factory=Path.cwd)
     memory: object | None = None
     journal: object | None = None
+    desktop_lock: object | None = None
     scheduler: object | None = None
     task_store: object | None = None
     extra: dict = field(default_factory=dict)
@@ -81,6 +82,7 @@ class Runtime:
             cwd=self.cwd,
             system_extra=system_extra,
             journal=self.journal,
+            desktop_lock=self.desktop_lock,
         )
         # Shared, long-lived services the tools reach through ToolContext.extra.
         # `agent` is set last so `delegate` can spawn a child of this very run.
@@ -157,6 +159,7 @@ def build_runtime(
 
     memory = _open_memory(config)
     journal = _open_journal(config)
+    desktop_lock = _open_desktop_lock(config)
     task_store = _open_task_store(config)
 
     mcp_pool = None
@@ -180,6 +183,7 @@ def build_runtime(
         cwd=work_dir,
         memory=memory,
         journal=journal,
+        desktop_lock=desktop_lock,
         task_store=task_store,
     )
 
@@ -211,6 +215,16 @@ def _attach_mcp(config: Config, registry: ToolRegistry, cwd: Path):
         return pool, list(names), dict(getattr(pool, "errors", {}) or {})
     except Exception as exc:
         return None, [], {"_connect": str(exc)}
+
+
+def _open_desktop_lock(config: Config):
+    """The cross-process claim on the desktop. Absent means unguarded, not broken."""
+    try:
+        from .osl.lock import DesktopLock  # noqa: PLC0415
+
+        return DesktopLock.for_home(config.home)
+    except Exception:
+        return None
 
 
 def _open_journal(config: Config):

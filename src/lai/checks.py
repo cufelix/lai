@@ -16,6 +16,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -365,13 +366,51 @@ def check_provider(runtime=None) -> Check:
 
 
 def check_ocr() -> Check:
-    if shutil.which("tesseract"):
+    """OCR needs two halves, and reporting only one is how it fails at runtime.
+
+    The binary and the Python binding are installed by different package
+    managers, so a machine can easily have one without the other — and then
+    `lai doctor` says OCR is fine right up until `ocr_read` raises.
+    """
+    binary = shutil.which("tesseract") is not None
+    try:
+        import pytesseract  # noqa: F401, PLC0415
+
+        binding = True
+    except ImportError:
+        binding = False
+
+    if binary and binding:
         return Check("ocr", "OCR (tesseract)", OK, "available", required=False)
+
+    missing = []
+    if not binary:
+        missing.append("the tesseract binary")
+    if not binding:
+        missing.append("the pytesseract binding")
     return Check(
         "ocr", "OCR (tesseract)", WARN,
-        "missing — apps without an accessibility tree are harder to read",
-        fix=_install_fix("tesseract", APT_PACKAGES["tesseract"]),
+        f"missing {' and '.join(missing)} — apps without an accessibility tree are harder to read",
+        fix=_ocr_fix(binary=binary, binding=binding),
         required=False,
+    )
+
+
+def _ocr_fix(*, binary: bool, binding: bool) -> Fix:
+    """Install whichever half is absent — pip for the binding, the distro for the binary."""
+    if binary and not binding:
+        return Fix(
+            description="install the pytesseract binding",
+            command=(sys.executable, "-m", "pip", "install", "--quiet", "pytesseract"),
+        )
+    install = _install_fix("tesseract", APT_PACKAGES["tesseract"])
+    if binding or not install.command:
+        return install
+    return Fix(
+        description="install tesseract and its Python binding",
+        command=install.command,
+        needs_sudo=True,
+        manual=f"then: {sys.executable} -m pip install pytesseract",
     )
 
 

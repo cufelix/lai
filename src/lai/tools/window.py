@@ -112,6 +112,7 @@ def register(registry: ToolRegistry) -> None:
         group="window",
     )
     def window_arrange(ctx: ToolContext, args: dict) -> ToolResult:
+        """Move or resize a window, and report what the window manager actually did."""
         try:
             window = _pick(ctx, args)
         except ValueError as exc:
@@ -124,7 +125,7 @@ def register(registry: ToolRegistry) -> None:
             except (KeyError, TypeError, ValueError):
                 return ToolResult.failure("bounds must have x, y, width and height")
             updated = manager.move_resize(window.id, rect)
-            return ToolResult.text(f"Moved {window.title!r} to {updated.bounds.as_tuple()}", **updated.to_dict())
+            return ToolResult.text(_arrange_summary(window, rect, updated), **updated.to_dict())
 
         state = args.get("state")
         if not state:
@@ -137,3 +138,35 @@ def register(registry: ToolRegistry) -> None:
             return ToolResult.text(f"Restored {window.title!r}", **updated.to_dict())
         updated = manager.set_state(window.id, state, True)
         return ToolResult.text(f"Set {state} on {window.title!r}", **updated.to_dict())
+
+
+# How far off a window can land before it is worth mentioning. Decorations and
+# grid snapping routinely cost a few pixels; nobody needs to hear about those.
+ARRANGE_SLACK = 8
+
+
+def _arrange_summary(window, wanted, updated) -> str:
+    """Say what happened, including when the window manager said no.
+
+    A window has a minimum size, a tiling WM has opinions, and a maximized
+    window ignores geometry entirely. Reporting "moved to 600x480" when the
+    window is still 720x972 is worse than useless: the agent then computes
+    click coordinates against a window that was never there.
+    """
+    got = updated.bounds
+    off = [
+        f"{name} {asked} → {actual}"
+        for name, asked, actual in (
+            ("x", wanted.x, got.x), ("y", wanted.y, got.y),
+            ("width", wanted.width, got.width), ("height", wanted.height, got.height),
+        )
+        if abs(asked - actual) > ARRANGE_SLACK
+    ]
+    if not off:
+        return f"Moved {window.title!r} to {got.as_tuple()}"
+    reason = "it is maximized or fullscreen" if updated.states else "its minimum size or the window manager"
+    return (
+        f"Window {window.title!r} is at {got.as_tuple()}, not what was asked for "
+        f"({', '.join(off)}) — {reason} refused the rest. "
+        "Use these bounds, not the ones you requested."
+    )

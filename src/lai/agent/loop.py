@@ -9,6 +9,7 @@ as success.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable
@@ -106,6 +107,7 @@ class Agent:
         cwd: Path | None = None,
         system_extra: str = "",
         journal=None,
+        desktop_lock=None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -116,6 +118,8 @@ class Agent:
         self.skills = skills
         self.journal = journal
         """Learned notes about this machine; None disables the whole idea."""
+        self.desktop_lock = desktop_lock
+        """Cross-process claim on the desktop, held for the length of a run."""
         self.session = session or Session()
         self.approver = approver
         self.on_event = on_event
@@ -133,6 +137,28 @@ class Agent:
         self.stop_requested.set()
 
     def run(self, task: str, *, max_steps: int | None = None) -> RunResult:
+        """Drive the task to completion, holding the desktop for its duration."""
+        if self.desktop_lock is None or not self._will_act():
+            return self._run(task, max_steps=max_steps)
+        # Name the task on the lock: "the desktop is busy" is an obstacle,
+        # "the desktop is busy opening firefox" is information.
+        with contextlib.suppress(AttributeError):
+            self.desktop_lock.task = task
+        with self.desktop_lock:
+            return self._run(task, max_steps=max_steps)
+
+    def _will_act(self) -> bool:
+        """Whether this run can actually change the screen.
+
+        Reading the desktop while another agent works is useful, not dangerous,
+        so an observation-only run does not queue behind one that is acting.
+        """
+        safety = getattr(self.config, "safety", None)
+        if safety is None:
+            return True
+        return not (safety.dry_run or safety.mode == "readonly")
+
+    def _run(self, task: str, *, max_steps: int | None = None) -> RunResult:
         limits = self.config.limits
         budget_steps = max_steps or limits.max_steps
         deadline = time.monotonic() + limits.max_seconds

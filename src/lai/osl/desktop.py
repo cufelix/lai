@@ -129,7 +129,7 @@ class Desktop:
             snapshot = self._safe(
                 lambda: self.a11y.snapshot(
                     pid=active.pid if (scope == "focused" and active) else None,
-                    within=active.bounds if (scope == "focused" and active) else None,
+                    within=_clip_region(active) if (scope == "focused" and active) else None,
                     max_elements=max_elements,
                 )
             )
@@ -167,7 +167,7 @@ class Desktop:
             active = self._safe(lambda: self.windows.active_window())
             if active:
                 kwargs.setdefault("pid", active.pid)
-                kwargs.setdefault("within", active.bounds)
+                kwargs.setdefault("within", _clip_region(active))
         snapshot = self.a11y.snapshot(**kwargs)
         self._snapshot = snapshot
         return snapshot
@@ -426,3 +426,28 @@ class Desktop:
             return fn()
         except Exception:
             return None
+
+
+# How far outside its window an element may sit and still be believed.
+#
+# AT-SPI reports element geometry from the toolkit's own idea of where the
+# window is, and that lags an X11 move by a frame or several. Clipping hard to
+# the window rectangle then deletes buttons the user can plainly see: move
+# gnome-calculator and seven of its keys vanish from the tree until the
+# toolkit catches up. Losing a real button is far worse than occasionally
+# keeping one from a neighbouring window of the same application, so the
+# clip is generous.
+CLIP_MARGIN = 400
+
+
+def _clip_region(window):
+    """The rectangle a focused window's elements are expected to fall inside."""
+    from .geometry import Rect  # noqa: PLC0415
+
+    bounds = window.bounds
+    return Rect(
+        bounds.x - CLIP_MARGIN,
+        bounds.y - CLIP_MARGIN,
+        bounds.width + CLIP_MARGIN * 2,
+        bounds.height + CLIP_MARGIN * 2,
+    )

@@ -119,6 +119,12 @@ def test_window_focus_unknown_id_fails_cleanly(app, registry):
 
 
 def test_window_arrange_moves_and_resizes(app, registry, desktop):
+    """It must report the bounds the window actually has, not the ones asked for.
+
+    A window has a minimum size and a window manager has opinions, so the
+    request is a request. Reporting success with the requested geometry is how
+    an agent ends up clicking at coordinates that were never on screen.
+    """
     target = {"x": 120, "y": 140, "width": 600, "height": 480}
     result = registry.call(
         "window_arrange", {"id": app["window"]["id"], "bounds": target}, app["ctx"]
@@ -126,9 +132,15 @@ def test_window_arrange_moves_and_resizes(app, registry, desktop):
     assert result.ok
     time.sleep(0.4)
     moved = desktop.windows.get(app["window"]["id"])
-    # Window managers may adjust for decorations, so allow generous slack.
-    assert abs(moved.bounds.width - target["width"]) < 160
-    assert abs(moved.bounds.height - target["height"]) < 160
+    reported = result.data["bounds"]
+
+    assert abs(reported["width"] - moved.bounds.width) <= 8, "the report must match reality"
+    assert abs(reported["height"] - moved.bounds.height) <= 8
+
+    refused = abs(moved.bounds.height - target["height"]) > 8
+    if refused:
+        assert "not what was asked for" in result.content
+        assert "height" in result.content
 
 
 def test_window_arrange_needs_a_state_or_bounds(app, registry):

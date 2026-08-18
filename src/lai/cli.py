@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .config import PERMISSION_MODES, load_config
 from .errors import LaiError
+from .osl.lock import DesktopBusy
 from .runtime import build_runtime
 
 BANNER = "LAI — native desktop agent"
@@ -1346,10 +1347,26 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted\n")
         return 130
+    except DesktopBusy as exc:
+        return _busy_desktop(Out(), exc)
     except LaiError as exc:
         sys.stderr.write(f"error: {exc}\n")
         _hint_for(exc)
         return 1
+
+
+def _busy_desktop(out: Out, exc) -> int:
+    """Another LAI is already driving. Say who, and what to do about it."""
+    holder = getattr(exc, "holder", None)
+    out.error(str(exc))
+    out.write("")
+    out.write("[yellow]One desktop, one agent.[/yellow] Two runs sharing a mouse produce")
+    out.write("one mangled screen, not two finished tasks.")
+    if holder is not None and holder.pid:
+        out.write(f"  [dim]holder:[/dim] pid {holder.pid}" + (f" — {holder.task}" if holder.task else ""))
+        out.write(f"  [dim]stop it with:[/dim] kill {holder.pid}")
+    out.write("  [dim]or wait for it to finish, then run this again[/dim]")
+    return 3
 
 
 def _hint_for(exc: LaiError) -> None:
