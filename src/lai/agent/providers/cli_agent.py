@@ -46,6 +46,13 @@ DEFAULT_TIMEOUT = 600.0
 MAX_PROMPT_CHARS = 400_000
 MAX_STAGED_IMAGES = 2
 
+# What a CLI silently refuses to accept. `claude` caps a prompt at 100_000
+# characters and reports the overflow as `{"is_error": true, ..., "api_error"}`
+# with zero tokens and no message — it never reaches the API at all, so it
+# looks exactly like an outage and retrying is useless. Measured, not guessed.
+CLI_PROMPT_LIMITS = {"claude": 100_000}
+SAFETY_MARGIN = 4_000
+
 # Linux caps a single argv entry at MAX_ARG_STRLEN (128 KiB). A full transcript
 # with 200+ tool schemas sails past that and execve fails with E2BIG — which is
 # how a working backend turns into "could not run claude". Anything bigger than
@@ -105,6 +112,14 @@ class CLISpec:
     """
     describe: str = ""
     extra_env: dict = field(default_factory=dict)
+
+    @property
+    def prompt_limit(self) -> int:
+        """Longest prompt this CLI will actually accept, with room to spare."""
+        limit = CLI_PROMPT_LIMITS.get(self.name, MAX_PROMPT_CHARS)
+        if not (self.stdin or self.stdin_fallback):
+            limit = min(limit, MAX_ARGV_CHARS)
+        return max(limit - SAFETY_MARGIN, 8_000)
 
     @property
     def sees_images(self) -> bool:
@@ -305,13 +320,7 @@ class CLIAgentProvider:
         )
 
     def _invoke(self, prompt: str, *, image_dir=None) -> str:
-        # A CLI that can only take the prompt as an argument is bounded by the
-        # kernel, not by us; truncating is the only alternative to E2BIG.
-        cap = MAX_PROMPT_CHARS
-        if not (self.spec.stdin or self.spec.stdin_fallback):
-            cap = min(cap, MAX_ARGV_CHARS)
-        if len(prompt) > cap:
-            prompt = prompt[:cap] + "\n[transcript truncated]\n"
+        prompt = _fit(prompt, self.spec.prompt_limit)
 
         model = self.model if self.model != self.spec.name else ""
         # (0.0, 3.0, 8.0): the first try, then two waits spaced far enough apart
@@ -463,6 +472,23 @@ class CLIAgentProvider:
             "Remember: tool calls belong in \"tool_calls\", not in prose."
         )
         return "\n\n".join(parts)
+
+
+def _fit(prompt: str, limit: int) -> str:
+    """Shrink a prompt to what the CLI accepts, from the middle outwards.
+
+    The head holds the protocol and the tool schemas, the tail holds the most
+    recent turns and the instruction to reply in JSON — cutting either one is
+    how a model ends up answering in prose or calling a tool that no longer
+    exists. So the oldest middle of the conversation goes first, which is also
+    the part it needs least.
+    """
+    if len(prompt) <= limit:
+        return prompt
+    marker = "\n\n[... older conversation dropped to fit this CLI's prompt limit ...]\n\n"
+    keep = limit - len(marker)
+    head = int(keep * 0.55)
+    return prompt[:head] + marker + prompt[-(keep - head):]
 
 
 # -- parsing --------------------------------------------------------------

@@ -35,6 +35,10 @@ SWITCH_PATTERNS = (
     r"\b500\b", r"\b502\b", r"\b503\b", r"\b529\b", r"overloaded",
     r"service unavailable", r"bad gateway", r"internal server error",
     r"timed out", r"timeout", r"connection (?:reset|refused|error)", r"network",
+    # A CLI backend that has already exhausted its own retries and still exits
+    # non-zero is broken for this run, whatever it blames. Handing over to the
+    # next backend is strictly better than ending the task here.
+    r"api_error", r"exited [1-9]", r"produced no output",
 )
 _SWITCH = re.compile("|".join(SWITCH_PATTERNS), re.IGNORECASE)
 

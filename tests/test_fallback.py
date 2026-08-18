@@ -356,3 +356,18 @@ def test_the_terminal_shows_a_switch_when_it_happens():
     })
     text = "\n".join(written)
     assert "zai stepped aside" in text and "cli:claude" in text and "429" in text
+
+
+def test_a_cli_that_keeps_exiting_non_zero_hands_over():
+    """Observed live: `claude` failed identically three times and killed the run.
+
+    By the time it reaches the chain the provider has already spent its own
+    retries, so whatever it blames, it is broken for this run.
+    """
+    detail = ('claude exited 1 ({"is_error":true,"terminal_reason":"api_error",'
+              '"input_tokens":0,"output_tokens":0})')
+    assert should_switch(ProviderError(detail))
+
+
+def test_a_cli_producing_no_output_hands_over():
+    assert should_switch(ProviderError("claude produced no output"))

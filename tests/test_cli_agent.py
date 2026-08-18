@@ -451,10 +451,41 @@ def test_a_cli_that_cannot_read_stdin_gets_a_truncated_prompt(monkeypatch):
     p = provider(monkeypatch, '{"text": "ok"}', spec=spec, record=calls)
     p.complete([Message.user("y" * 500_000)], tools=TOOLS)
     argv = calls[0][0]
-    assert max(len(arg) for arg in argv) <= MAX_ARGV_CHARS + 200
-    assert "[transcript truncated]" in "".join(argv)
+    assert max(len(arg) for arg in argv) <= MAX_ARGV_CHARS
+    joined = "".join(argv)
+    assert "dropped to fit" in joined
+    assert "Reply with ONE JSON object" in joined, "the protocol must survive the cut"
 
 
 def test_codex_always_uses_stdin_regardless_of_size():
     argv, stdin = CLI_SPECS["codex"].build("short")
     assert stdin == "short" and "short" not in argv
+
+
+def test_a_prompt_is_kept_under_the_cli_s_real_limit(monkeypatch):
+    """Measured, not guessed: `claude` refuses a prompt over 100_000 characters
+    and reports it as an api_error with zero tokens, which retrying cannot fix."""
+    calls: list = []
+    p = provider(monkeypatch, '{"text": "ok"}', spec=CLI_SPECS["claude"], record=calls)
+    p.complete([Message.user("y" * 500_000)], tools=TOOLS)
+    argv, stdin = calls[0]
+    sent = stdin if stdin is not None else max(argv, key=len)
+    assert len(sent) < 100_000, "over this the CLI fails before it reaches the API"
+
+
+def test_shrinking_a_prompt_keeps_the_protocol_and_the_latest_turn(monkeypatch):
+    """Cutting the tail loses the JSON instruction; cutting the head loses the tools."""
+    calls: list = []
+    p = provider(monkeypatch, '{"text": "ok"}', spec=CLI_SPECS["claude"], record=calls)
+    p.complete([Message.user("z" * 400_000), Message.user("the actual question")], tools=TOOLS)
+    argv, stdin = calls[0]
+    sent = stdin if stdin is not None else max(argv, key=len)
+    assert "Reply with ONE JSON object" in sent
+    assert "the actual question" in sent
+    assert "dropped to fit" in sent
+
+
+def test_a_prompt_that_fits_is_left_alone(monkeypatch):
+    from lai.agent.providers.cli_agent import _fit
+
+    assert _fit("short", 1000) == "short"
