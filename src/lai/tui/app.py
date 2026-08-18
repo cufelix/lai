@@ -366,6 +366,9 @@ class LaiApp(App):
             )
             self.write(f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]")
             bar.provider = f"{payload['to']}/{payload.get('model', '')}"
+        elif kind == "learned":
+            titles = payload.get("titles") or payload.get("notes") or []
+            self.write("[magenta]✎ learned:[/magenta] " + "; ".join(str(t) for t in titles[:3]))
         elif kind == "compacting":
             self.write("[dim]… compacting context[/dim]")
         elif kind == "error":

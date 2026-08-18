@@ -46,6 +46,7 @@ class Runtime:
     mcp_errors: dict = field(default_factory=dict)
     cwd: Path = field(default_factory=Path.cwd)
     memory: object | None = None
+    journal: object | None = None
     scheduler: object | None = None
     task_store: object | None = None
     extra: dict = field(default_factory=dict)
@@ -79,6 +80,7 @@ class Runtime:
             on_event=on_event,
             cwd=self.cwd,
             system_extra=system_extra,
+            journal=self.journal,
         )
         # Shared, long-lived services the tools reach through ToolContext.extra.
         # `agent` is set last so `delegate` can spawn a child of this very run.
@@ -154,6 +156,7 @@ def build_runtime(
             provider_error = str(exc)
 
     memory = _open_memory(config)
+    journal = _open_journal(config)
     task_store = _open_task_store(config)
 
     mcp_pool = None
@@ -176,6 +179,7 @@ def build_runtime(
         mcp_errors=mcp_errors,
         cwd=work_dir,
         memory=memory,
+        journal=journal,
         task_store=task_store,
     )
 
@@ -207,6 +211,16 @@ def _attach_mcp(config: Config, registry: ToolRegistry, cwd: Path):
         return pool, list(names), dict(getattr(pool, "errors", {}) or {})
     except Exception as exc:
         return None, [], {"_connect": str(exc)}
+
+
+def _open_journal(config: Config):
+    """The learned-notes journal. Unreadable notes must not stop a run."""
+    try:
+        from .knowledge import Journal  # noqa: PLC0415
+
+        return Journal.open(config.home)
+    except Exception:
+        return None
 
 
 def _open_memory(config: Config):

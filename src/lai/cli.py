@@ -39,6 +39,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "repl": ("run tasks", "Plain interactive session (no prompt niceties)"),
     "tui": ("run tasks", "Full-screen dashboard: live view, costs, approvals"),
     "web": ("run tasks", "Open the same agent in your browser"),
+    "notes": ("inspect", "What it has learned about this machine — read, edit, delete"),
     "observe": ("inspect", "Print what the agent currently sees"),
     "sessions": ("inspect", "List or inspect past sessions"),
     "tools": ("inspect", "List available tools"),
@@ -237,6 +238,13 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
                 f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]"
             )
             spin()
+        elif kind == "learned":
+            halt()
+            titles = payload.get("titles") or payload.get("notes") or []
+            out.write(
+                "[magenta]✎ learned:[/magenta] " + "; ".join(str(t) for t in titles[:3])
+                + "  [dim](/notes to read, /edit to correct)[/dim]"
+            )
         elif kind == "compacting":
             halt()
             out.write(f"[dim]… compacting context ({payload['estimated_tokens']} tokens)[/dim]")
@@ -567,6 +575,62 @@ def cmd_skills(args) -> int:
         return 1
     finally:
         runtime.close()
+
+
+def cmd_notes(args) -> int:
+    """The learning journal: what the agent believes about this desktop."""
+    from .chat.notes import edit, render_list, render_note  # noqa: PLC0415
+    from .knowledge import Journal  # noqa: PLC0415
+
+    out = Out(quiet=args.json)
+    journal = Journal.open(load_config().home)
+    action = (args.action or "list").lower()
+    name = args.name.strip()
+
+    if args.json:
+        if name:
+            note = journal.get(name)
+            if note is None:
+                sys.stderr.write(f"error: no note called {name!r}\n")
+                return 1
+            print(json.dumps(note.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps([n.to_dict() for n in journal.list()], ensure_ascii=False, indent=2))
+        return 0
+
+    if action in ("show", "cat") or (action == "list" and name):
+        note = journal.get(name)
+        if note is None:
+            out.error(f"no note called {name!r}")
+            return 1
+        out.write(render_note(note))
+        return 0
+    if action == "edit":
+        if not name:
+            out.error("which note? `lai notes` lists them")
+            return 2
+        out.write(edit(journal, name))
+        return 0
+    if action in ("rm", "remove", "delete", "forget"):
+        if not name:
+            out.error("which note?")
+            return 2
+        if journal.delete(name):
+            out.write(f"[yellow]forgot {name}[/yellow]")
+            return 0
+        out.error(f"no note called {name!r}")
+        return 1
+    if action == "add":
+        topic, _, lesson = name.partition(":")
+        if not lesson.strip():
+            out.error("usage: lai notes add '<topic>: <what you know>'")
+            return 2
+        note = journal.append(topic.strip(), lesson.strip())
+        out.write(f"[green]noted[/green] [dim]{note.name}[/dim]")
+        return 0
+
+    out.write(render_list(journal.list()))
+    return 0
 
 
 def cmd_sessions(args) -> int:
@@ -1084,6 +1148,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_skills.add_argument("query", nargs="?", default="")
     p_skills.add_argument("--overwrite", action="store_true")
     p_skills.set_defaults(func=cmd_skills)
+
+    p_notes = sub.add_parser(
+        "notes",
+        help=_help("notes"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+            LAI writes these after a run that taught it something about this machine,
+            and reads them back on the next one. They are plain markdown in
+            ~/.lai/notes — correct them, or delete what is wrong.
+
+            examples:
+              lai notes                              everything it believes
+              lai notes show drawing                 read one
+              lai notes edit drawing                 open it in $EDITOR
+              lai notes add "drawing: canvas starts at y=140"
+              lai notes rm drawing
+        """),
+    )
+    p_notes.add_argument(
+        "action", nargs="?", default="list",
+        choices=["list", "show", "cat", "edit", "add", "rm", "remove", "delete", "forget"],
+    )
+    p_notes.add_argument("name", nargs="?", default="", help="Note name, or 'topic: lesson' for add")
+    p_notes.add_argument("--json", action="store_true")
+    p_notes.set_defaults(func=cmd_notes)
 
     p_sessions = sub.add_parser("sessions", help=_help("sessions"))
     p_sessions.add_argument("id", nargs="?", default="")

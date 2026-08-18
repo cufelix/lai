@@ -105,6 +105,7 @@ class Agent:
         on_event: EventCallback | None = None,
         cwd: Path | None = None,
         system_extra: str = "",
+        journal=None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -113,6 +114,8 @@ class Agent:
         self.policy = policy
         self.audit = audit or AuditLog.disabled()
         self.skills = skills
+        self.journal = journal
+        """Learned notes about this machine; None disables the whole idea."""
         self.session = session or Session()
         self.approver = approver
         self.on_event = on_event
@@ -139,7 +142,7 @@ class Agent:
         # submitting a task and the loop starting (the daemon's /stop racing
         # /task) must still be honoured. The flag is cleared when the run ends.
         self.session.task = self.session.task or task
-        self._system_prompt = self._build_system_prompt()
+        self._system_prompt = self._build_system_prompt(task)
         self.session.append(Message.user(task))
 
         self._emit("start", {"task": task, "provider": self.provider.name, "model": self.provider.model})
@@ -242,17 +245,61 @@ class Agent:
         result.session_id = self.session.id
         self._emit("done", result.to_dict())
         self.audit.write("run_end", **result.to_dict())
+        self._learn(task, result)
         return result
+
+    def _learn(self, task: str, result: RunResult) -> None:
+        """Write down what this run taught us about the machine.
+
+        Runs after the result exists and swallows everything: a reflection
+        failure is a missed improvement, never a failed task.
+        """
+        learning = getattr(self.config, "learning", None)
+        if self.journal is None or learning is None or not (learning.enabled and learning.reflect):
+            return
+        if result.status in ("idle", "interrupted"):
+            return
+        try:
+            from .reflect import build_trace, reflect  # noqa: PLC0415
+
+            notes = reflect(
+                provider=self.provider,
+                journal=self.journal,
+                task=task,
+                result=result,
+                trace=build_trace(self.session),
+                audit=self.audit,
+            )
+            if notes:
+                self._emit("learned", {"notes": [n.name for n in notes],
+                                       "titles": [n.title for n in notes]})
+        except Exception as exc:
+            self.audit.write("reflect_failed", error=str(exc)[:200])
 
     # -- internals -------------------------------------------------------
 
-    def _build_system_prompt(self) -> str:
+    def _knowledge_block(self, task: str = "") -> str:
+        """Notes from earlier runs, if the journal is readable and has any."""
+        if self.journal is None or not getattr(self.config, "learning", None):
+            return ""
+        if not self.config.learning.enabled:
+            return ""
+        try:
+            return self.journal.context_block(
+                task, limit=self.config.learning.max_notes_in_prompt
+            )
+        except Exception:
+            # Knowledge is an improvement, never a prerequisite.
+            return ""
+
+    def _build_system_prompt(self, task: str = "") -> str:
         return build_system_prompt(
             desktop=self.desktop,
             safety=getattr(self.config, "safety", None),
             skills=self.skills,
             cwd=self.cwd,
             extra=self.system_extra,
+            knowledge=self._knowledge_block(task or self.session.task or ""),
         )
 
     def _model_turn(self):

@@ -137,6 +137,21 @@ class ChannelsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class LearningConfig:
+    """Whether the agent keeps notes on what it discovers here.
+
+    On by default: an agent that rediscovers the same desktop every run is
+    the single biggest avoidable cost in a long session. It costs one extra
+    model call at the end of a run that actually did something.
+    """
+
+    enabled: bool = True
+    reflect: bool = True
+    """Write new notes after a run. Off means notes are still read, never written."""
+    max_notes_in_prompt: int = 6
+
+
+@dataclass(frozen=True, slots=True)
 class LimitsConfig:
     max_steps: int = 60
     max_seconds: float = 1800.0
@@ -153,6 +168,7 @@ class Config:
     desktop: DesktopConfig = field(default_factory=DesktopConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     channels: ChannelsConfig = field(default_factory=ChannelsConfig)
+    learning: LearningConfig = field(default_factory=LearningConfig)
     skill_paths: tuple[str, ...] = DEFAULT_SKILL_PATHS
     mcp_config_paths: tuple[str, ...] = (
         "{home}/mcp.json", "{cwd}/.mcp.json", "~/.claude/mcp-configs/mcp-servers.json",
@@ -189,6 +205,10 @@ class Config:
     def schedule_file(self) -> Path:
         return self.home / "schedule.json"
 
+    @property
+    def notes_dir(self) -> Path:
+        return self.home / "notes"
+
     def ensure_dirs(self) -> None:
         for path in (self.home, self.sessions_dir, self.logs_dir, self.skills_dir, self.artifacts_dir):
             path.mkdir(parents=True, exist_ok=True)
@@ -210,6 +230,7 @@ class Config:
             "channels": self.channels.redacted(),
             "desktop": {"max_edge": self.desktop.max_edge, "max_elements": self.desktop.max_elements},
             "limits": {"max_steps": self.limits.max_steps, "max_seconds": self.limits.max_seconds},
+            "learning": {"enabled": self.learning.enabled, "reflect": self.learning.reflect},
         }
 
 
@@ -344,6 +365,13 @@ def load_config(
         max_consecutive_errors=int(limits_data.get("max_consecutive_errors", 6)),
     )
 
+    learning_data = _section(data, "learning")
+    learning = LearningConfig(
+        enabled=_bool(env.get("LAI_LEARNING"), learning_data.get("enabled", True)),
+        reflect=_bool(env.get("LAI_REFLECT"), learning_data.get("reflect", True)),
+        max_notes_in_prompt=int(learning_data.get("max_notes_in_prompt", 6)),
+    )
+
     telegram_data = _section(channels_data, "telegram")
     discord_data = _section(channels_data, "discord")
     webhook_data = _section(channels_data, "webhook")
@@ -365,6 +393,7 @@ def load_config(
         desktop=desktop,
         limits=limits,
         channels=channels,
+        learning=learning,
         skill_paths=_tuple(data.get("skill_paths"), DEFAULT_SKILL_PATHS),
         mcp_config_paths=_tuple(data.get("mcp_config_paths"), _CONFIG_DEFAULTS.mcp_config_paths),
         log_level=env.get("LAI_LOG_LEVEL", data.get("log_level", "info")),

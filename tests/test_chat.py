@@ -215,3 +215,138 @@ def test_the_status_line_shows_who_and_what_stands_by(runtime):
     })()
     line = status_line(runtime)
     assert "zai/glm-5" in line and "ask" in line and "ollama" in line and "+1" in line
+
+
+# -- the learning journal in the chat -------------------------------------
+
+
+@pytest.fixture
+def learning_runtime(tmp_path):
+    from lai.knowledge import Journal
+
+    runtime = FakeRuntime(tmp_path)
+    runtime.journal = Journal.open(tmp_path)
+    return runtime
+
+
+def test_learn_writes_a_note(learning_runtime, tmp_path):
+    text = run(Context(runtime=learning_runtime), "/learn drawing: the canvas starts at y=140")
+    assert "noted" in text
+    assert "y=140" in learning_runtime.journal.get("drawing").body
+    assert (tmp_path / "notes" / "drawing.md").is_file()
+
+
+def test_learn_without_a_lesson_explains_itself(learning_runtime):
+    assert "usage" in run(Context(runtime=learning_runtime), "/learn drawing")
+
+
+def test_notes_lists_what_it_knows(learning_runtime):
+    learning_runtime.journal.write("drawing", "- the canvas starts at y=140")
+    text = run(Context(runtime=learning_runtime), "/notes")
+    assert "drawing" in text and "y=140" in text
+
+
+def test_notes_with_a_name_shows_that_note(learning_runtime):
+    learning_runtime.journal.write("drawing", "- the canvas starts at y=140", title="Drawing")
+    text = run(Context(runtime=learning_runtime), "/notes drawing")
+    assert "Drawing" in text and "y=140" in text
+
+
+def test_an_empty_journal_says_how_to_fill_it(learning_runtime):
+    assert "/learn" in run(Context(runtime=learning_runtime), "/notes")
+
+
+def test_forget_removes_a_note(learning_runtime):
+    learning_runtime.journal.write("wrong", "- nonsense")
+    assert "forgot" in run(Context(runtime=learning_runtime), "/forget wrong")
+    assert learning_runtime.journal.get("wrong") is None
+
+
+def test_forgetting_something_absent_says_so(learning_runtime):
+    assert "no note" in run(Context(runtime=learning_runtime), "/forget nope")
+
+
+def test_learning_can_be_switched_off_and_persists(learning_runtime, tmp_path):
+    from lai import config_file
+
+    assert "off" in run(Context(runtime=learning_runtime), "/learning off")
+    assert learning_runtime.config.learning.enabled is False
+    assert config_file.read(tmp_path)["learning"]["enabled"] is False
+    assert "on" in run(Context(runtime=learning_runtime), "/learning on")
+    assert learning_runtime.config.learning.enabled is True
+
+
+def test_learning_with_no_argument_reports_the_state(learning_runtime):
+    assert "learning is" in run(Context(runtime=learning_runtime), "/learning")
+
+
+# -- the settings page ---------------------------------------------------
+
+
+def test_settings_shows_everything_that_can_be_changed(learning_runtime):
+    learning_runtime.journal.write("a", "- x")
+    text = run(Context(runtime=learning_runtime), "/settings")
+    for label in ("model", "failover", "permissions", "learning", "tools", "skills", "config"):
+        assert label in text
+    assert "1 note(s)" in text
+
+
+def test_settings_names_the_command_that_changes_each_thing(learning_runtime):
+    text = run(Context(runtime=learning_runtime), "/settings")
+    assert "/model" in text and "/mode" in text and "/fallback" in text
+
+
+# -- editing ---------------------------------------------------------------
+
+
+def test_edit_saves_what_the_editor_wrote(learning_runtime, monkeypatch, tmp_path):
+    from lai.chat import notes as notes_module
+
+    def fake_editor(command, **kwargs):
+        path = command[-1]
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("- edited by a human\n")
+        return type("P", (), {"returncode": 0})()
+
+    monkeypatch.setattr(notes_module, "editor_command", lambda: ["fake-editor"])
+    monkeypatch.setattr(notes_module.subprocess, "run", fake_editor)
+    learning_runtime.journal.write("drawing", "- what the agent believed")
+
+    assert "saved" in run(Context(runtime=learning_runtime), "/edit drawing")
+    assert learning_runtime.journal.get("drawing").body == "- edited by a human"
+
+
+def test_emptying_a_note_in_the_editor_deletes_it(learning_runtime, monkeypatch):
+    from lai.chat import notes as notes_module
+
+    def empty_it(command, **kwargs):
+        with open(command[-1], "w", encoding="utf-8") as fh:
+            fh.write("\n")
+        return type("P", (), {"returncode": 0})()
+
+    monkeypatch.setattr(notes_module, "editor_command", lambda: ["fake-editor"])
+    monkeypatch.setattr(notes_module.subprocess, "run", empty_it)
+    learning_runtime.journal.write("wrong", "- nonsense")
+
+    assert "deleted" in run(Context(runtime=learning_runtime), "/edit wrong")
+    assert learning_runtime.journal.get("wrong") is None
+
+
+def test_an_unchanged_edit_changes_nothing(learning_runtime, monkeypatch):
+    from lai.chat import notes as notes_module
+
+    monkeypatch.setattr(notes_module, "editor_command", lambda: ["fake-editor"])
+    monkeypatch.setattr(notes_module.subprocess, "run",
+                        lambda command, **kw: type("P", (), {"returncode": 0})())
+    learning_runtime.journal.write("drawing", "- original")
+
+    assert "unchanged" in run(Context(runtime=learning_runtime), "/edit drawing")
+    assert learning_runtime.journal.get("drawing").body == "- original"
+
+
+def test_edit_without_an_editor_says_where_the_files_are(learning_runtime, monkeypatch):
+    from lai.chat import notes as notes_module
+
+    monkeypatch.setattr(notes_module, "editor_command", list)
+    text = run(Context(runtime=learning_runtime), "/edit drawing")
+    assert "EDITOR" in text and "~/.lai/notes" in text

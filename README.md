@@ -260,6 +260,7 @@ lai web                         # the same agent, in your browser
 lai tui                         # full-screen dashboard
 lai repl                        # plain interactive session
 lai doctor                      # environment diagnostics
+lai notes                       # what it has learned about this machine
 lai observe                     # print exactly what the agent sees right now
 lai tools                       # list the 53 tools
 lai skills list|install|show    # manage skills
@@ -294,6 +295,8 @@ Slash commands cover everything you would otherwise have to quit for:
 | `/mode` | `readonly` · `ask` · `auto` · `yolo` |
 | `/status` | who is answering, what stands behind them, what already stepped aside |
 | `/doctor` `/observe` `/tools` `/skills` | inspect without leaving |
+| `/notes` `/edit` `/learn` `/forget` | what it has learned here — read, correct, teach, delete |
+| `/settings` | everything you can change, and what it is set to |
 | `/new` | forget this conversation and start clean |
 
 Everything you change is written to `~/.lai/config.toml`, so the next start
@@ -306,12 +309,18 @@ installed; without it, the same interface runs on plain input.
 lai web            # opens http://127.0.0.1:8787/#<token>
 ```
 
-The same agent, the same desktop gate, reached from a tab: streaming tool
-calls, a live view of the actual screen next to the conversation, and a
-settings sheet that switches backend or permission mode without touching a
-file. The page is one self-contained file served by the daemon — no CDN, no
-bundler, a strict `default-src 'none'` policy — and the token travels in the
-URL *fragment*, which browsers never send to a server.
+The same agent, the same desktop gate, reached from a tab — in three views:
+
+- **Chat** — streaming tool calls, a live view of the actual screen beside the
+  conversation, stop button, failover announced inline.
+- **Learned** — everything it believes about this machine, as an editable
+  markdown list. Fix a wrong note, write one yourself, delete what is stale.
+- **Settings** — backend, failover, permission mode and learning, written to
+  the same `config.toml` the terminal reads.
+
+The page is one self-contained file served by the daemon — no CDN, no bundler,
+a strict `default-src 'none'` policy — and the token travels in the URL
+*fragment*, which browsers never send to a server.
 
 ### The dashboard
 
@@ -344,6 +353,40 @@ Permission prompts appear as a modal where you are already looking — `y` allow
 
 Useful flags on `do` / `chat` / `tui`: `--mode`, `--model`, `--provider`,
 `--steps`, `--timeout`, `--dry-run`, `--json`, `--verbose`.
+
+### It learns this machine
+
+An agent that rediscovers your desktop every run wastes most of its steps on
+things it already worked out yesterday. So after a run that taught it
+something, it writes a note:
+
+```
+$ lai notes
+  drawing   the canvas starts below the toolbar at about y=140 (app, drawing)
+  editor    "Text Editor" in the launcher is actually Xed        (app)
+  firefox   ctrl+l focuses the URL bar; the a11y tree is slow    (browser)
+
+3 note(s) in ~/.lai/notes
+```
+
+Those notes go into the next run's prompt, marked as *starting points to
+verify* rather than facts — a stale note followed blindly is worse than none.
+
+They are plain markdown in `~/.lai/notes`, deliberately: an agent's beliefs
+about your machine should be something you can read, correct and throw away.
+
+```bash
+lai notes                 # everything it believes
+lai notes show drawing    # read one
+lai notes edit drawing    # open it in $EDITOR
+lai notes add "drawing: the canvas starts at y=140"
+lai notes rm drawing
+```
+
+The same list is editable in the browser under **Learned**, and in the chat
+with `/notes`, `/edit`, `/learn` and `/forget`. Reflection costs one extra
+model call at the end of a run that actually did something; `/learning off`
+(or `[learning] enabled = false`) stops it, and existing notes are still read.
 
 ### When a backend runs out
 

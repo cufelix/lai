@@ -190,6 +190,7 @@ def build_system_prompt(
     skills=None,
     cwd: Path | None = None,
     extra: str = "",
+    knowledge: str = "",
 ) -> str:
     sections = [
         IDENTITY,
@@ -201,6 +202,10 @@ def build_system_prompt(
     skills_text = skills_block(skills)
     if skills_text:
         sections.append(skills_text)
+    if knowledge:
+        # After the skills, before the completion rules: it is context about
+        # this machine, not an instruction about how to behave.
+        sections.append(knowledge)
     sections.append(COMPLETION_PROTOCOL)
     if extra:
         sections.append(extra)

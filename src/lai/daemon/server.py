@@ -149,6 +149,41 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _handle_note(self, state: DaemonState, path: str) -> None:
+        """Create, replace or delete one note. The journal is the agent's beliefs,
+        and the person whose desktop this is gets the last word on them."""
+        journal = getattr(state.runtime, "journal", None)
+        if journal is None:
+            self._send(503, {"error": "no_journal"})
+            return
+        name = path[len("/notes/"):].strip() if path.startswith("/notes/") else ""
+
+        if self.command == "DELETE":
+            if not name:
+                self._send(400, {"error": "bad_request", "message": "which note?"})
+            elif journal.delete(name):
+                self._send(200, {"deleted": name})
+            else:
+                self._send(404, {"error": "no_such_note"})
+            return
+
+        body = self._read_json()
+        name = name or str(body.get("name", "")).strip()
+        if not name:
+            self._send(400, {"error": "bad_request", "message": "'name' is required"})
+            return
+        try:
+            note = journal.write(
+                name,
+                str(body.get("body", "")),
+                title=str(body.get("title", "")),
+                tags=tuple(str(t) for t in (body.get("tags") or []) if str(t).strip()),
+            )
+        except OSError as exc:
+            self._send(500, {"error": "write_failed", "message": str(exc)})
+            return
+        self._send(200, note.to_dict())
+
     def _send_page(self) -> None:
         from ..web import page  # noqa: PLC0415
 
@@ -261,12 +296,28 @@ class Handler(BaseHTTPRequestHandler):
                 })
             elif path == "/screen":
                 self._send_screenshot(runtime)
+            elif path == "/notes":
+                journal = getattr(runtime, "journal", None)
+                self._send(200, {"notes": [n.to_dict() for n in journal.list()] if journal else []})
+            elif path.startswith("/notes/"):
+                journal = getattr(runtime, "journal", None)
+                note = journal.get(path[len("/notes/"):]) if journal else None
+                if note is None:
+                    self._send(404, {"error": "no_such_note"})
+                else:
+                    self._send(200, note.to_dict())
             else:
                 self._send(404, {"error": "not_found", "path": path})
         except LaiError as exc:
             self._send(500, exc.to_dict())
         except Exception as exc:  # a handler crash must not kill the daemon
             self._send(500, {"error": type(exc).__name__, "message": str(exc)})
+
+    def do_PUT(self) -> None:
+        self.do_POST()
+
+    def do_DELETE(self) -> None:
+        self.do_POST()
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
@@ -299,12 +350,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(202, {"accepted": True, "route": accepted.route})
             return
 
+        if path == "/notes" or path.startswith("/notes/"):
+            self._handle_note(state, path)
+            return
+
         if path in ("/provider", "/mode"):
             from ..chat import backends as backend_tools  # noqa: PLC0415
 
             body = self._read_json()
             try:
-                if path == "/mode":
+                if path == "/mode" and "learning" in body:
+                    from dataclasses import replace as _replace  # noqa: PLC0415
+
+                    runtime = state.runtime
+                    enabled = bool(body["learning"])
+                    runtime.config = runtime.config.with_overrides(
+                        learning=_replace(runtime.config.learning, enabled=enabled, reflect=enabled)
+                    )
+                    backend_tools.save(runtime.config, {"learning": {"enabled": enabled, "reflect": enabled}})
+                    self._send(200, {"learning": enabled})
+                elif path == "/mode":
                     self._send(200, {"mode": backend_tools.set_mode(state.runtime, str(body.get("mode", "")))})
                 elif body.get("fallback") is not None:
                     wanted = str(body["fallback"]).strip().lower()
@@ -482,6 +547,11 @@ class Handler(BaseHTTPRequestHandler):
             } if provider else None,
             "provider_error": runtime.provider_error,
             "mode": runtime.config.safety.mode,
+            "learning": {
+                "enabled": getattr(runtime.config, "learning", None) is not None
+                and runtime.config.learning.enabled,
+                "notes": len(runtime.journal.list()) if getattr(runtime, "journal", None) else 0,
+            },
             "tools": len(runtime.registry),
             "skills": len(runtime.skills),
             "mcp_tools": len(runtime.mcp_tools),

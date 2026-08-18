@@ -47,7 +47,10 @@ class FakeProvider:
 
 class FakeRuntime:
     def __init__(self, config):
+        from lai.knowledge import Journal
+
         self.config = config
+        self.journal = Journal.open(config.home)
         self.provider = FakeProvider()
         self.provider_error = ""
         self.registry = type("R", (), {"__len__": lambda self: 4, "to_anthropic": lambda self: []})()
@@ -224,3 +227,76 @@ def test_a_query_token_does_not_unlock_anything_else(web):
 def test_the_screen_still_refuses_a_wrong_token(web):
     assert httpx.get(f"{web['url']}/screen?token=nope", timeout=5).status_code == 401
     assert httpx.get(f"{web['url']}/screen", timeout=5).status_code == 401
+
+
+# -- the learning journal over HTTP --------------------------------------
+
+
+def test_notes_are_listed(web, tmp_path):
+    web["runtime"].journal.write("drawing", "- the canvas starts at y=140", tags=("app",))
+    body = httpx.get(f"{web['url']}/notes", headers=auth(), timeout=5).json()
+    assert [n["name"] for n in body["notes"]] == ["drawing"]
+    assert body["notes"][0]["summary"].startswith("the canvas")
+
+
+def test_one_note_can_be_read(web):
+    web["runtime"].journal.write("editor", "- it is Xed")
+    body = httpx.get(f"{web['url']}/notes/editor", headers=auth(), timeout=5).json()
+    assert body["body"] == "- it is Xed"
+
+
+def test_a_missing_note_is_a_404(web):
+    assert httpx.get(f"{web['url']}/notes/nope", headers=auth(), timeout=5).status_code == 404
+
+
+def test_a_note_can_be_written_from_the_browser(web, tmp_path):
+    """The agent's beliefs are the user's to correct."""
+    response = httpx.put(
+        f"{web['url']}/notes/drawing", headers=auth(), timeout=5,
+        json={"name": "drawing", "title": "Drawing", "body": "- corrected by hand"},
+    )
+    assert response.status_code == 200
+    assert web["runtime"].journal.get("drawing").body == "- corrected by hand"
+    assert (tmp_path / "home" / "notes" / "drawing.md").is_file()
+
+
+def test_a_note_can_be_deleted_from_the_browser(web):
+    web["runtime"].journal.write("wrong", "- nonsense the agent believed")
+    assert httpx.request(
+        "DELETE", f"{web['url']}/notes/wrong", headers=auth(), timeout=5
+    ).status_code == 200
+    assert web["runtime"].journal.get("wrong") is None
+
+
+def test_a_note_name_from_the_browser_cannot_escape_the_directory(web, tmp_path):
+    httpx.put(f"{web['url']}/notes/..%2F..%2Fevil", headers=auth(), timeout=5,
+              json={"body": "- pwned"})
+    assert not (tmp_path / "evil.md").exists()
+    assert not (tmp_path / "home" / "evil.md").exists()
+
+
+def test_the_notes_endpoints_need_a_token(web):
+    assert httpx.get(f"{web['url']}/notes", timeout=5).status_code == 401
+    assert httpx.put(f"{web['url']}/notes/x", json={"body": "y"}, timeout=5).status_code == 401
+
+
+def test_status_reports_whether_it_is_learning(web):
+    web["runtime"].journal.write("a", "- x")
+    body = httpx.get(f"{web['url']}/status", headers=auth(), timeout=5).json()
+    assert body["learning"]["enabled"] is True
+    assert body["learning"]["notes"] == 1
+
+
+def test_learning_can_be_turned_off_from_the_browser(web, tmp_path):
+    from lai import config_file
+
+    response = httpx.post(f"{web['url']}/mode", headers=auth(), json={"learning": False}, timeout=5)
+    assert response.status_code == 200 and response.json()["learning"] is False
+    assert web["runtime"].config.learning.enabled is False
+    assert config_file.read(tmp_path / "home")["learning"]["enabled"] is False
+
+
+def test_the_page_offers_the_three_views(web):
+    body = httpx.get(f"{web['url']}/", timeout=5).text
+    for view in ("chat", "notes", "settings"):
+        assert f'data-page="{view}"' in body

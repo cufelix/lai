@@ -34,6 +34,8 @@ SECTION_NOTES = {
     "limits": "# Budgets for one run. The agent stops and reports rather than running away.",
     "channels": "# Remote control. `lai channels` manages who is allowed in.",
     "desktop": "# Perception tuning. max_edge caps screenshot size sent to the model.",
+    "learning": "# Notes the agent keeps about this machine, in ~/.lai/notes.\n"
+                "# `enabled = false` stops it reading them; `reflect = false` stops it writing.",
 }
 
 
@@ -44,7 +46,7 @@ def config_path(home: Path) -> Path:
 def render(settings: dict) -> str:
     """Render a nested ``{section: {key: value}}`` mapping as annotated TOML."""
     lines = [HEADER]
-    for section in ("provider", "safety", "limits", "desktop", "channels"):
+    for section in ("provider", "safety", "learning", "limits", "desktop", "channels"):
         values = settings.get(section) or {}
         # A nested dict is a sub-table ([channels.telegram]) and is emitted
         # below; rendering it here would produce a scalar with the same name

@@ -45,7 +45,39 @@
   .iconbtn:hover { color: var(--text); border-color: var(--accent); }
   .spacer { flex: 1; }
 
+  nav { display: flex; gap: .15rem; }
+  .tab {
+    all: unset; cursor: pointer; padding: .34rem .7rem; border-radius: 8px;
+    font-size: .85rem; color: var(--dim);
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); background: var(--user); font-weight: 600; }
+
   main { display: grid; grid-template-columns: 1fr; overflow: hidden; }
+  .page { overflow-y: auto; }
+  .sheetpage { padding: 1.4rem 1.2rem 3rem; max-width: 60rem; margin: 0 auto; width: 100%; }
+  .pagehead { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 1.2rem; }
+  .pagehead h1 { font-size: 1.1rem; margin: 0 0 .3rem; }
+  .pagehead p { margin: 0; color: var(--dim); font-size: .85rem; max-width: 60ch; }
+  .split { display: grid; grid-template-columns: 15rem 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 760px) { .split { grid-template-columns: 1fr; } }
+  .notelist { display: flex; flex-direction: column; gap: .2rem; }
+  .noteitem {
+    all: unset; cursor: pointer; padding: .5rem .6rem; border-radius: 9px;
+    border: 1px solid transparent;
+  }
+  .noteitem:hover { border-color: var(--line); }
+  .noteitem[aria-current="true"] { background: var(--user); border-color: var(--line); }
+  .noteitem b { display: block; font-size: .87rem; }
+  .editor { display: flex; flex-direction: column; gap: .5rem; }
+  .editor input, .editor textarea {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: .55rem .65rem; font: inherit;
+  }
+  .editor textarea { min-height: 22rem; font: .87rem/1.6 var(--mono); resize: vertical; }
+  .editor input { font-weight: 600; }
+  .iconbtn.danger { color: var(--bad); }
+  .sub { font-size: .78rem; color: var(--dim); }
   main.with-screen { grid-template-columns: 1fr 340px; }
   @media (max-width: 860px) { main.with-screen { grid-template-columns: 1fr; } aside { display: none; } }
 
@@ -73,6 +105,8 @@
     border-left: 2px solid var(--line); padding-left: .7rem;
   }
   .note.switch { color: var(--warn); border-color: var(--warn); }
+  .note.learned { color: var(--accent); border-color: var(--accent); }
+  .linkish { all: unset; cursor: pointer; text-decoration: underline; }
   .note.error { color: var(--bad); border-color: var(--bad); }
   .result { max-width: 62ch; margin: .8rem auto; padding-top: .6rem; border-top: 1px solid var(--line);
             font-size: .85rem; color: var(--dim); }
@@ -129,16 +163,20 @@
 
 <header>
   <span class="brand">LAI</span>
+  <nav id="nav">
+    <button class="tab" data-page="chat">Chat</button>
+    <button class="tab" data-page="notes">Learned</button>
+    <button class="tab" data-page="settings">Settings</button>
+  </nav>
+  <span class="spacer"></span>
   <span class="chip live" id="who">connecting…</span>
   <span class="chip" id="modeChip">–</span>
   <span class="chip" id="standby" hidden></span>
-  <span class="spacer"></span>
   <button class="iconbtn" id="screenToggle" title="Live desktop">screen</button>
-  <button class="iconbtn" id="openSettings">settings</button>
 </header>
 
 <main id="main">
-  <div id="feed">
+  <div id="feed" class="page" data-page="chat">
     <div class="empty" id="empty">
       <h1>Your desktop, driven.</h1>
       <p>Say what you want done. LAI opens the real applications on this machine,
@@ -150,6 +188,76 @@
       </div>
     </div>
   </div>
+  <section class="page sheetpage" data-page="notes" hidden>
+    <div class="pagehead">
+      <div>
+        <h1>What it has learned here</h1>
+        <p>LAI writes these after a run that taught it something about this machine,
+           and reads them back on the next one. They are plain markdown in
+           <code>~/.lai/notes</code> — correct anything that is wrong.</p>
+      </div>
+      <button class="iconbtn" id="newNote">new note</button>
+    </div>
+    <div class="split">
+      <div id="noteList" class="notelist"></div>
+      <div class="editor" id="editor" hidden>
+        <input type="text" id="noteTitle" placeholder="Title">
+        <textarea id="noteBody" spellcheck="false"
+          placeholder="- one lesson per line, specific to this machine"></textarea>
+        <div class="row" style="justify-content:space-between">
+          <span class="sub" id="noteStatus"></span>
+          <span>
+            <button class="iconbtn danger" id="deleteNote">delete</button>
+            <button class="send" id="saveNote" type="button">Save</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page sheetpage" data-page="settings" hidden>
+    <div class="pagehead">
+      <div>
+        <h1>Settings</h1>
+        <p>Saved to <code>~/.lai/config.toml</code>, applied immediately, and shared
+           with the terminal — a choice made here is the same choice there.</p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="grow"><b>Permission mode</b>
+        <span class="sub">how much it may do without asking</span></div>
+      <select id="modeSelect">
+        <option value="readonly">readonly — look, never touch</option>
+        <option value="ask">ask — confirm anything risky</option>
+        <option value="auto">auto — act, confirm shell</option>
+        <option value="yolo">yolo — no prompts</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div class="grow"><b>Failover</b>
+        <span class="sub">when a backend hits its quota or fails, carry on with the next</span></div>
+      <select id="fallbackSelect">
+        <option value="auto">auto — every working backend</option>
+        <option value="off">off — stop instead</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div class="grow"><b>Learning</b>
+        <span class="sub" id="learningSub">keep notes about this machine after each run</span></div>
+      <select id="learningSelect">
+        <option value="on">on — write notes</option>
+        <option value="off">off — read only</option>
+      </select>
+    </div>
+
+    <h2 style="margin-top:1.4rem">Backends</h2>
+    <p class="sub" style="margin:0 0 .4rem">The one in use answers; the rest stand by, in this order.</p>
+    <div id="backends"></div>
+  </section>
+
   <aside id="side" hidden>
     <h2>Desktop</h2>
     <img id="screen" alt="live view of the desktop">
@@ -165,38 +273,6 @@
   <div class="hint">Enter to run · Shift+Enter for a new line</div>
 </footer>
 
-<dialog id="settings">
-  <div class="sheet">
-    <h3>Settings</h3>
-    <p>Changes are saved to <code>~/.lai/config.toml</code> and apply immediately.</p>
-
-    <div class="row">
-      <div class="grow"><b>Permission mode</b>
-        <span class="sub">how much it may do without asking</span></div>
-      <select id="modeSelect">
-        <option value="readonly">readonly — look, never touch</option>
-        <option value="ask">ask — confirm anything risky</option>
-        <option value="auto">auto — act, confirm shell</option>
-        <option value="yolo">yolo — no prompts</option>
-      </select>
-    </div>
-
-    <div class="row">
-      <div class="grow"><b>Failover</b>
-        <span class="sub" id="fallbackSub">when a backend hits its quota, move on</span></div>
-      <select id="fallbackSelect">
-        <option value="auto">auto — every working backend</option>
-        <option value="off">off — stop instead</option>
-      </select>
-    </div>
-
-    <h2 style="margin-top:1rem">Backends</h2>
-    <div id="backends"></div>
-    <div class="row" style="justify-content:flex-end">
-      <button class="iconbtn" id="closeSettings">done</button>
-    </div>
-  </div>
-</dialog>
 
 <script>
 (() => {
@@ -311,6 +387,14 @@
         if (event.images) refreshScreen();
         break;
       }
+      case "learned": {
+        const titles = (event.titles || event.notes || []).slice(0, 3).join("; ");
+        const note = put(el("div", "note learned", "✎ learned: " + titles + " — "));
+        const link = el("button", "linkish", "read or correct");
+        link.addEventListener("click", () => show("notes"));
+        note.appendChild(link);
+        break;
+      }
       case "provider_switch":
         put(el("div", "note switch",
           `${event.from} stepped aside (${event.reason || "unavailable"}) — now using ${event.to}/${event.model}`));
@@ -372,6 +456,11 @@
       $("standby").textContent = standbys.length ? "↻ " + standbys.slice(0, 2).join(" → ") : "";
       $("modeSelect").value = status.mode || "ask";
       $("fallbackSelect").value = (provider.fallback || []).length ? "auto" : "off";
+      const learning = status.learning || {};
+      $("learningSelect").value = learning.enabled ? "on" : "off";
+      $("learningSub").textContent = learning.enabled
+        ? `keeping notes about this machine — ${learning.notes || 0} so far`
+        : "not writing new notes; existing ones are still read";
     } catch { $("who").textContent = "daemon unreachable"; }
   }
 
@@ -420,8 +509,25 @@
     }
   }
 
-  $("openSettings").addEventListener("click", () => { $("settings").showModal(); refreshBackends(); });
-  $("closeSettings").addEventListener("click", () => $("settings").close());
+  // -- pages --------------------------------------------------------------
+  // Three views over one runtime, not three apps: switching a setting here and
+  // switching it in the terminal end up in the same config file.
+  function show(page) {
+    for (const section of document.querySelectorAll(".page")) {
+      section.hidden = section.dataset.page !== page;
+    }
+    for (const tab of document.querySelectorAll(".tab")) {
+      tab.setAttribute("aria-selected", String(tab.dataset.page === page));
+    }
+    document.querySelector("footer").hidden = page !== "chat";
+    if (page === "settings") refreshBackends();
+    if (page === "notes") refreshNotes();
+    try { sessionStorage.setItem("lai.page", page); } catch { /* private mode */ }
+  }
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.addEventListener("click", () => show(tab.dataset.page));
+  }
+
   $("modeSelect").addEventListener("change", async (e) => {
     await api("/mode", { method: "POST", body: JSON.stringify({ mode: e.target.value }) });
     refreshStatus();
@@ -430,7 +536,93 @@
     await api("/provider", { method: "POST", body: JSON.stringify({ fallback: e.target.value }) });
     refreshStatus();
   });
+  $("learningSelect").addEventListener("change", async (e) => {
+    await api("/mode", { method: "POST", body: JSON.stringify({ learning: e.target.value === "on" }) });
+    refreshStatus();
+  });
 
+  // -- the learning journal ------------------------------------------------
+  let notes = [], current = null;
+
+  async function refreshNotes(keep) {
+    try { notes = (await (await api("/notes")).json()).notes || []; } catch { notes = []; }
+    const list = $("noteList");
+    list.textContent = "";
+    if (!notes.length) {
+      const blank = el("p", "sub",
+        "Nothing yet. LAI writes a note when a run teaches it something durable about this machine.");
+      list.appendChild(blank);
+    }
+    for (const note of notes) {
+      const item = el("button", "noteitem");
+      item.appendChild(el("b", null, note.title || note.name));
+      item.appendChild(el("span", "sub", note.summary || "(empty)"));
+      item.setAttribute("aria-current", String(note.name === (keep || (current && current.name))));
+      item.addEventListener("click", () => openNote(note.name));
+      list.appendChild(item);
+    }
+    const still = notes.find((n) => n.name === (keep || (current && current.name)));
+    if (still) openNote(still.name, true);
+    else if (!keep) closeEditor();
+  }
+
+  function closeEditor() {
+    current = null;
+    $("editor").hidden = true;
+  }
+
+  async function openNote(name, quiet) {
+    let note;
+    try { note = await (await api("/notes/" + encodeURIComponent(name))).json(); } catch { return; }
+    if (!note || note.error) return;
+    current = note;
+    $("editor").hidden = false;
+    $("noteTitle").value = note.title || note.name;
+    $("noteBody").value = note.body || "";
+    $("noteStatus").textContent = note.updated
+      ? "updated " + new Date(note.updated * 1000).toLocaleString() : "";
+    if (!quiet) {
+      for (const item of document.querySelectorAll(".noteitem")) {
+        item.setAttribute("aria-current", String(item.querySelector("b").textContent === (note.title || note.name)));
+      }
+    }
+  }
+
+  $("newNote").addEventListener("click", () => {
+    current = { name: "", title: "", body: "" };
+    $("editor").hidden = false;
+    $("noteTitle").value = "";
+    $("noteBody").value = "";
+    $("noteStatus").textContent = "new note — the title becomes its filename";
+    $("noteTitle").focus();
+  });
+
+  $("saveNote").addEventListener("click", async () => {
+    const title = $("noteTitle").value.trim();
+    if (!title) { $("noteStatus").textContent = "a title is required"; return; }
+    const name = (current && current.name) || title;
+    $("noteStatus").textContent = "saving…";
+    const response = await api("/notes/" + encodeURIComponent(name), {
+      method: "PUT",
+      body: JSON.stringify({ name, title, body: $("noteBody").value }),
+    });
+    if (!response.ok) { $("noteStatus").textContent = "could not save"; return; }
+    const saved = await response.json();
+    current = saved;
+    $("noteStatus").textContent = "saved";
+    refreshNotes(saved.name);
+  });
+
+  $("deleteNote").addEventListener("click", async () => {
+    if (!current || !current.name) return closeEditor();
+    await api("/notes/" + encodeURIComponent(current.name), { method: "DELETE" });
+    closeEditor();
+    refreshNotes();
+  });
+
+  let startPage = "chat";
+  try { startPage = sessionStorage.getItem("lai.page") || "chat"; } catch { /* private mode */ }
+  show(startPage);
   refreshStatus();
   setInterval(() => { if (screenOn && !running) refreshScreen(); }, 4000);
 })();

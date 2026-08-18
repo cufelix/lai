@@ -355,6 +355,44 @@ on its own:
 - Tool output is written with `textContent` everywhere. A window title is
   untrusted input, and this page will never be the thing that executes it.
 
+## Phase 6 — it gets better at this machine
+
+The gap phase 6 closes: LAI had memory tools and never used them on its own, so
+every run rediscovered the same desktop. Which launcher entry opens the editor,
+where a canvas starts below a toolbar, what a save dialog calls its field — all
+worked out, then thrown away.
+
+**The journal.** `~/.lai/notes/*.md`, one file per topic, with the same
+frontmatter shape skills use. Markdown rather than a database on purpose: an
+agent's beliefs about someone's machine must be readable, correctable and
+deletable by that someone. A note that cannot be audited will quietly mislead
+every future run.
+
+**Reading.** Notes relevant to the task are injected into the system prompt,
+under a heading that tells the model to treat them as starting points and to
+say so when one turns out to be wrong. Bounded to a few thousand characters so
+the journal can never crowd out the task.
+
+**Writing.** After a run that did more than one thing, the model is shown a
+compressed trace — the calls it made, what came back, what failed — and asked
+what is worth remembering about *this machine*. The answer is merged, not
+appended: the same lesson learned three times stays one line, because a journal
+that grows a copy per run is worse than none. `{"notes": []}` is an explicitly
+good answer, and prose that ignores the format is never filed as fact.
+
+Three rules keep it from becoming a liability: never fabricate (only what the
+trace shows), never block (reflection runs after the result exists and swallows
+its own failures), never grow without bound (one call, capped trace, four
+lessons maximum).
+
+**Pages, everywhere.** The same journal is a CLI command (`lai notes
+list|show|edit|add|rm`), a set of chat commands (`/notes`, `/edit` in `$EDITOR`,
+`/learn`, `/forget`, `/learning on|off`), and a page in the browser with a real
+markdown editor. `/settings` and the browser's Settings page show the same
+state and write the same `config.toml`.
+
+---
+
 ### Defects found and fixed in phase 5
 
 18. **A large transcript killed the CLI backends** — the prompt was passed as a single argv entry, and Linux caps one at 128 KiB (`MAX_ARG_STRLEN`). With MCP servers connected the prompt sailed past it and `execve` failed with `E2BIG`, so a perfectly working `claude` reported "could not run claude: Argument list too long" three times and ended the run. Found live, in the browser, on the first real task. Prompts over 96 KB now go down stdin; a CLI that cannot read stdin gets a prompt truncated to fit instead.

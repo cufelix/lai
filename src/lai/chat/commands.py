@@ -169,6 +169,114 @@ def cmd_session(ctx: Context, arg: str) -> str:
     return json.dumps(session.summary(), indent=2) if session else "[dim]no session yet[/dim]"
 
 
+def _journal(ctx: Context):
+    return getattr(ctx.runtime, "journal", None)
+
+
+def cmd_notes(ctx: Context, arg: str) -> str:
+    """What the agent has learned about this machine."""
+    from .notes import render_list, render_note  # noqa: PLC0415
+
+    journal = _journal(ctx)
+    if journal is None:
+        return "[yellow]the journal is unavailable[/yellow]"
+    if arg.strip():
+        note = journal.get(arg.strip())
+        return render_note(note) if note else f"[red]no note called {arg.strip()!r}[/red]"
+    return render_list(journal.list())
+
+
+def cmd_note(ctx: Context, arg: str) -> str:
+    journal = _journal(ctx)
+    if journal is None or not arg.strip():
+        return "[dim]usage: /note <name>[/dim]"
+    from .notes import render_note  # noqa: PLC0415
+
+    note = journal.get(arg.strip())
+    return render_note(note) if note else f"[red]no note called {arg.strip()!r}[/red]"
+
+
+def cmd_edit(ctx: Context, arg: str) -> str:
+    """Open a note in $EDITOR — the agent's beliefs, corrected by hand."""
+    from .notes import edit  # noqa: PLC0415
+
+    journal = _journal(ctx)
+    if journal is None:
+        return "[yellow]the journal is unavailable[/yellow]"
+    name = arg.strip()
+    if not name:
+        return "[dim]usage: /edit <name> — /notes lists them[/dim]"
+    return edit(journal, name)
+
+
+def cmd_learn(ctx: Context, arg: str) -> str:
+    """Teach it something directly: /learn drawing: the canvas starts at y=140."""
+    journal = _journal(ctx)
+    if journal is None:
+        return "[yellow]the journal is unavailable[/yellow]"
+    topic, sep, lesson = arg.partition(":")
+    if not sep or not lesson.strip():
+        return "[dim]usage: /learn <topic>: <what you know>[/dim]"
+    note = journal.append(topic.strip(), lesson.strip())
+    return f"[green]noted[/green] [dim]{note.name} — {len(note.body.splitlines())} line(s)[/dim]"
+
+
+def cmd_forget(ctx: Context, arg: str) -> str:
+    journal = _journal(ctx)
+    if journal is None or not arg.strip():
+        return "[dim]usage: /forget <name>[/dim]"
+    return (
+        f"[yellow]forgot {arg.strip()}[/yellow]" if journal.delete(arg.strip())
+        else f"[red]no note called {arg.strip()!r}[/red]"
+    )
+
+
+def cmd_settings(ctx: Context, arg: str) -> str:
+    """Everything you can change, and what it is set to."""
+    runtime = ctx.runtime
+    info = backends.describe(runtime)
+    learning = getattr(runtime.config, "learning", None)
+    journal = _journal(ctx)
+    notes = len(journal.list()) if journal is not None else 0
+
+    rows = [
+        ("model", f"{info['name']}/{info['model']}", "/model"),
+        ("failover", " → ".join(info["fallback"]) or "off", "/fallback"),
+        ("permissions", runtime.config.safety.mode, "/mode"),
+        ("learning", ("on" if learning and learning.enabled else "off") + f" · {notes} note(s)", "/learning"),
+        ("tools", str(len(runtime.registry)), "/tools"),
+        ("skills", str(len(runtime.skills)), "/skills"),
+        ("config", str(runtime.config.home / "config.toml"), ""),
+    ]
+    width = max(len(label) for label, _, _ in rows) + 2
+    lines = ["[bold]Settings[/bold]"]
+    lines += [
+        f"  {label.ljust(width)}[bold]{value}[/bold]" + (f"  [dim]{command}[/dim]" if command else "")
+        for label, value, command in rows
+    ]
+    return "\n".join(lines)
+
+
+def cmd_learning(ctx: Context, arg: str) -> str:
+    """Turn the journal on or off."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    runtime = ctx.runtime
+    current = getattr(runtime.config, "learning", None)
+    if current is None:
+        return "[yellow]learning is unavailable in this build[/yellow]"
+    text = arg.strip().lower()
+    if text not in ("on", "off"):
+        state = "on" if current.enabled else "off"
+        return f"learning is [bold]{state}[/bold] [dim](/learning on|off)[/dim]"
+    enabled = text == "on"
+    runtime.config = runtime.config.with_overrides(
+        learning=replace(current, enabled=enabled, reflect=enabled)
+    )
+    backends.save(runtime.config, {"learning": {"enabled": enabled, "reflect": enabled}})
+    return f"[green]learning {text}[/green]"
+
+
 def cmd_web(ctx: Context, arg: str) -> str:
     return (
         "[dim]run [bold]lai web[/bold] in another terminal — it opens the same agent "
@@ -184,6 +292,12 @@ COMMANDS: dict[str, tuple] = {
     "fallback": (cmd_fallback, "standby order when a backend refuses", False),
     "mode": (cmd_mode, "permission mode: readonly · ask · auto · yolo", False),
     "new": (cmd_new, "start a fresh session", False),
+    "settings": (cmd_settings, "everything you can change, and what it is set to", False),
+    "notes": (cmd_notes, "what it has learned about this machine", False),
+    "learn": (cmd_learn, "teach it: /learn <topic>: <what you know>", False),
+    "edit": (cmd_edit, "open a note in $EDITOR", False),
+    "forget": (cmd_forget, "delete a note", False),
+    "learning": (cmd_learning, "turn note-keeping on or off", False),
     "tools": (cmd_tools, "list tools", False),
     "skills": (cmd_skills, "list skills", False),
     "observe": (cmd_observe, "what the agent sees right now", False),
@@ -196,6 +310,8 @@ COMMANDS: dict[str, tuple] = {
     "h": (cmd_help, "", True),
     "reset": (cmd_new, "", True),
     "provider": (cmd_model, "", True),
+    "note": (cmd_note, "", True),
+    "config": (cmd_settings, "", True),
 }
 
 
