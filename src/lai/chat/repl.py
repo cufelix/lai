@@ -17,6 +17,7 @@ from pathlib import Path
 
 from ..agent.session import Session
 from ..errors import Interrupted, LaiError
+from ..osl.lock import DesktopBusy
 from . import backends
 from .commands import COMMANDS, NEW, QUIT, Context
 from .commands import run as run_command
@@ -148,6 +149,10 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False) -> int
             out.write("\n[yellow]interrupted[/yellow]")
         except Interrupted:
             out.write("\n[yellow]interrupted[/yellow]")
+        except DesktopBusy as exc:
+            # Somebody else is driving. That ends this task, not the session.
+            out.write(f"[yellow]⏸ {exc}[/yellow]")
+            out.write("[dim]one desktop, one agent — try again when it finishes[/dim]")
         except LaiError as exc:
             out.error(str(exc))
             if "provider" in str(exc).lower() or "backend" in str(exc).lower():

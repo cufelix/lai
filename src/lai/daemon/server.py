@@ -35,6 +35,7 @@ from typing import Any
 from ..agent.session import Session
 from ..config import Config, load_config
 from ..errors import LaiError
+from ..osl.lock import DesktopBusy
 from ..runtime import Runtime, build_runtime
 
 DEFAULT_HOST = "127.0.0.1"
@@ -455,6 +456,11 @@ class Handler(BaseHTTPRequestHandler):
                 state.completed += 1 if result.ok else 0
                 state.failed += 0 if result.ok else 1
             self._send(200, result.to_dict())
+        except DesktopBusy as exc:
+            # Another process holds the desktop; 409 is what the caller already
+            # handles for "somebody else is running something".
+            self._send(409, {"error": "desktop_busy", "message": str(exc),
+                             "holder": {"pid": exc.holder.pid, "task": exc.holder.task}})
         except Exception as exc:
             self._send(500, {"error": type(exc).__name__, "message": str(exc)})
         finally:

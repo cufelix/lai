@@ -448,6 +448,19 @@ The split is the point. The coding agent writes; LAI opens the result on a real
 screen, presses its keys, and says whether it works — which is the half no
 coding agent can do for itself.
 
+The first live run of it failed in a way worth recording. Given a spec-shaped
+task, the coding agent replied with a design and *"please confirm"* — and wrote
+nothing. That is exactly right in an interactive session and useless here,
+because nobody is there to confirm. Every job now carries a brief saying so:
+this is your only turn, nobody will read a question, make sensible choices and
+write the files, and report the result accurately because it will be checked
+against the disk and a real screen.
+
+What made it visible at all was the tool reporting evidence rather than the
+worker's account: "No files changed on disk — whatever it says, nothing was
+written." LAI then diagnosed the cause itself and retried with explicit
+instructions, which is the behaviour the design was aiming for.
+
 ### Defects found and fixed in phase 7
 
 23. **`hint=` was written for nobody.** Only `ToolResult.content` reaches the model, so guidance passed as `hint=` or `detail=` lived in `data` where the model never saw it — worse than omitting it, because the code reads as though help was given. Both are folded into the text now.

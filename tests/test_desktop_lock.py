@@ -258,3 +258,60 @@ def test_the_refusal_names_the_task_that_is_running(lock_path, tmp_path):
 
     agent.run("open firefox and check the weather")
     assert "open firefox" in seen["holder"].task
+
+
+# -- the interfaces cope with a busy desktop -----------------------------
+
+
+def test_the_chat_reports_a_busy_desktop_without_ending_the_session(tmp_path, monkeypatch):
+    """A task refused for lack of the desktop must not close the conversation."""
+    from lai.chat.repl import run_chat
+    from lai.config import load_config
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    written: list[str] = []
+
+    class FakeOut:
+        def write(self, text="", **kwargs):
+            written.append(str(text))
+
+        def error(self, text):
+            written.append(f"error: {text}")
+
+        def rule(self, title=""):
+            pass
+
+        def raw(self, text):
+            pass
+
+        def spinner(self, text):
+            return None
+
+    class Busy:
+        def run(self, task):
+            raise DesktopBusy(Holder(pid=4242, task="drawing a house"))
+
+        def interrupt(self):
+            pass
+
+    class FakeRuntime:
+        def __init__(self):
+            self.config = load_config().with_overrides(home=tmp_path)
+            self.provider = type("P", (), {"name": "zai", "model": "glm"})()
+            self.provider_error = ""
+            self.registry = type("R", (), {"__len__": lambda self: 1})()
+            self.skills = type("S", (), {"__len__": lambda self: 0})()
+            self.extra: dict = {}
+
+        def agent(self, **kwargs):
+            return Busy()
+
+    def eof(self, prompt, **kwargs):
+        raise EOFError
+
+    monkeypatch.setattr("lai.chat.repl.Reader.read", eof)
+    code = run_chat(FakeRuntime(), out=FakeOut(), task="open firefox")
+    text = "\n".join(written)
+    assert code == 0, "the session survives"
+    assert "4242" in text and "drawing a house" in text
+    assert "one desktop, one agent" in text.lower()

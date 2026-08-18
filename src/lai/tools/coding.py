@@ -38,6 +38,11 @@ MAX_TIMEOUT = 3600.0
 MAX_OUTPUT_CHARS = 6_000
 MAX_LISTED_FILES = 40
 
+# Somebody will eventually point this at a home directory. Walking it twice
+# (before and after) would cost more than the job itself, so the scan is
+# bounded and says so rather than quietly reporting a partial answer.
+MAX_SCANNED_FILES = 20_000
+
 # How to run each CLI as a *worker* that may edit files in one directory —
 # which is a different invocation from using it as a model (see
 # agent/providers/cli_agent.py, where the same binaries answer questions).
@@ -48,6 +53,27 @@ CODERS: dict[str, tuple[str, ...]] = {
     "opencode": ("opencode", "run", "{task}"),
 }
 PREFERENCE = ("claude", "codex", "gemini", "opencode")
+
+# Observed live: given a spec-shaped task, a coding agent replied with a design
+# and "please confirm" — and wrote nothing, because in an interactive session
+# that is exactly right. Nobody is there to confirm. The contract has to be
+# stated, or the job silently becomes a proposal.
+BRIEF = """\
+You are running non-interactively as a worker for an automated agent. Nobody \
+will read a question, and there is no next message: this is your only turn.
+
+Do not ask for confirmation, propose a plan for approval, or describe what you \
+would do. Make sensible choices yourself and WRITE THE FILES. Work only inside \
+the current directory.
+
+When you are finished, state in one or two lines which files you created or \
+changed and anything the caller should know. Your work is verified by looking \
+at the files on disk and at the result on a real screen, so an accurate report \
+of an imperfect result is worth far more than a confident one.
+
+The job:
+
+"""
 
 
 def available_coders() -> list[str]:
@@ -119,16 +145,21 @@ def register(registry: ToolRegistry) -> None:
             )
 
         timeout = min(float(args.get("timeout") or DEFAULT_TIMEOUT), MAX_TIMEOUT)
-        before = _snapshot_files(workspace)
+        before, scanned_fully = _snapshot_files(workspace)
         started = time.monotonic()
 
+        briefed = BRIEF + task
         argv = [
-            part.replace("{task}", task).replace("{workspace}", str(workspace))
+            part.replace("{task}", briefed).replace("{workspace}", str(workspace))
             for part in CODERS[coder]
         ]
         try:
             completed = subprocess.run(
                 argv, cwd=str(workspace), capture_output=True, text=True,
+                # Closed, not inherited: a CLI that waits to see whether input
+                # is coming spends three seconds of every call finding out that
+                # it is not, and says so in the output.
+                stdin=subprocess.DEVNULL,
                 timeout=timeout, check=False,
             )
         except subprocess.TimeoutExpired:
@@ -140,7 +171,8 @@ def register(registry: ToolRegistry) -> None:
             return ToolResult.failure(f"could not run {coder}: {exc}")
 
         elapsed = time.monotonic() - started
-        changed = _changed_files(workspace, before)
+        changed, still_full = _changed_files(workspace, before)
+        scanned_fully = scanned_fully and still_full
         output = _tail((completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else ""))
 
         if completed.returncode != 0 and not changed:
@@ -153,7 +185,7 @@ def register(registry: ToolRegistry) -> None:
         summary = [
             f"{coder} worked for {elapsed:.0f}s in {workspace}.",
             "",
-            _describe_changes(changed),
+            _describe_changes(changed, complete=scanned_fully),
             "",
             "What it reported:",
             output or "(no output)",
@@ -186,23 +218,32 @@ def _prepare_workspace(raw) -> Path:
     return workspace
 
 
-def _snapshot_files(workspace: Path) -> dict:
-    """Path → (mtime, size), so 'what changed' is measured rather than claimed."""
+def _snapshot_files(workspace: Path) -> tuple[dict, bool]:
+    """Path → (mtime, size), so 'what changed' is measured rather than claimed.
+
+    Returns (files, complete). ``complete`` is False when the workspace is too
+    large to scan, which makes "nothing changed" honest instead of merely
+    unobserved.
+    """
     found: dict = {}
+    complete = True
     for path in _walk(workspace):
+        if len(found) >= MAX_SCANNED_FILES:
+            complete = False
+            break
         try:
             stat = path.stat()
         except OSError:
             continue
         found[path] = (stat.st_mtime, stat.st_size)
-    return found
+    return found, complete
 
 
-def _changed_files(workspace: Path, before: dict) -> list[Path]:
-    after = _snapshot_files(workspace)
+def _changed_files(workspace: Path, before: dict) -> tuple[list[Path], bool]:
+    after, complete = _snapshot_files(workspace)
     changed = [path for path, stamp in after.items() if before.get(path) != stamp]
     changed += [path for path in before if path not in after]
-    return sorted(set(changed))
+    return sorted(set(changed)), complete
 
 
 def _walk(workspace: Path):
@@ -213,9 +254,19 @@ def _walk(workspace: Path):
             yield Path(root) / name
 
 
-def _describe_changes(changed: list[Path]) -> str:
+def _describe_changes(changed: list[Path], *, complete: bool = True) -> str:
+    if not complete:
+        note = " (this workspace is too large to scan completely, so the list may be partial)"
+        return _list_changes(changed) + note if changed else (
+            "The workspace is too large to scan, so nothing can be said about what changed"
+            f"{note}. Check the files you expected yourself."
+        )
     if not changed:
         return "No files changed on disk — whatever it says, nothing was written."
+    return _list_changes(changed)
+
+
+def _list_changes(changed: list[Path]) -> str:
     listing = "\n".join(f"  {path}" for path in changed[:MAX_LISTED_FILES])
     more = f"\n  … and {len(changed) - MAX_LISTED_FILES} more" if len(changed) > MAX_LISTED_FILES else ""
     return f"{len(changed)} file(s) changed on disk:\n{listing}{more}"

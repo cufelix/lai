@@ -89,7 +89,7 @@ def test_the_task_and_the_workspace_reach_the_cli(registry, ctx, tmp_path, monke
         "code_agent", {"task": "write a haiku module", "workspace": str(tmp_path), "coder": "claude"}, ctx
     )
     argv, kwargs = calls[0]
-    assert "write a haiku module" in argv
+    assert any("write a haiku module" in part for part in argv)
     assert str(tmp_path) in argv, "the CLI must be told which directory it may touch"
     assert kwargs["cwd"] == str(tmp_path)
 
@@ -223,3 +223,38 @@ def test_noisy_output_is_trimmed_from_the_front(registry, ctx, tmp_path, monkeyp
 def test_available_coders_reflects_the_machine(monkeypatch):
     monkeypatch.setattr("lai.tools.coding.shutil.which", lambda name: "/usr/bin/x" if name == "codex" else None)
     assert available_coders() == ["codex"]
+
+
+def test_an_enormous_workspace_is_not_scanned_forever(registry, ctx, tmp_path, monkeypatch):
+    """Someone will point this at a home directory; two full walks would cost
+    more than the job, and 'nothing changed' would be unobserved, not true."""
+    import lai.tools.coding as coding
+
+    monkeypatch.setattr(coding, "MAX_SCANNED_FILES", 3)
+    for index in range(10):
+        (tmp_path / f"file{index}.txt").write_text("x", encoding="utf-8")
+    fake_coder(monkeypatch, writes={"new.py": "y"})
+
+    result = registry.call("code_agent", {"task": "t", "workspace": str(tmp_path)}, ctx)
+    assert result.ok
+    assert "too large to scan" in result.content, "it must not claim to know what changed"
+
+
+def test_the_worker_is_told_that_nobody_can_answer_it(registry, ctx, tmp_path, monkeypatch):
+    """Observed live: given a spec, a coding agent replied with a design and
+    'please confirm', and wrote nothing — correct in a chat, useless here."""
+    calls: list = []
+    fake_coder(monkeypatch, record=calls)
+    registry.call("code_agent", {"task": "build a thing", "workspace": str(tmp_path)}, ctx)
+    sent = " ".join(calls[0][0])
+    assert "non-interactively" in sent
+    assert "Do not ask for confirmation" in sent
+    assert "build a thing" in sent
+
+
+def test_the_worker_gets_no_stdin(registry, ctx, tmp_path, monkeypatch):
+    """Inherited stdin costs three seconds per call while the CLI waits for it."""
+    calls: list = []
+    fake_coder(monkeypatch, record=calls)
+    registry.call("code_agent", {"task": "t", "workspace": str(tmp_path)}, ctx)
+    assert calls[0][1]["stdin"] == subprocess.DEVNULL
