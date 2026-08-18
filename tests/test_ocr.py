@@ -31,7 +31,14 @@ from lai.osl.screen import Screenshot
 from lai.tools.base import ToolContext, ToolRegistry
 from lai.tools.perception import register as register_perception
 
+# OCR needs both halves: the binary on PATH *and* the Python binding. Either
+# one missing means the engine cannot run, so the live test has nothing to say.
 HAS_TESSERACT = shutil.which("tesseract") is not None
+try:
+    import pytesseract as _pytesseract  # noqa: F401
+    HAS_OCR = HAS_TESSERACT
+except ImportError:
+    HAS_OCR = False
 
 
 def _shot(*, region=Rect(1000, 500, 200, 60), scale=1.0, size=(200, 60)) -> Screenshot:
@@ -327,7 +334,7 @@ def test_ocr_engines_are_isolated_per_context(registry):
 
 
 @pytest.mark.x11
-@pytest.mark.skipif(not HAS_TESSERACT, reason="tesseract binary is not installed")
+@pytest.mark.skipif(not HAS_OCR, reason="tesseract binary or pytesseract binding is not installed")
 def test_real_ocr_reads_something_from_the_live_screen():
     engine = OCREngine()
     result = engine.read(Rect(0, 0, 1920, 1080))

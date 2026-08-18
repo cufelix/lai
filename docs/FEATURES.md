@@ -127,12 +127,12 @@ The Chrome extension reads the DOM. The OS equivalent is a *fused* view: pixels 
 | # | Feature | Notes | Tier |
 |---|---------|-------|------|
 | 6.1 | CLI one-shot: `lai do "<task>"` | **C** |
-| 6.2 | Interactive REPL | **C** |
+| 6.2 | Interactive REPL | shipped; `lai chat` is the richer default | **C** |
 | 6.3 | `lai doctor` env diagnostics | **C** |
 | 6.4 | Daemon mode + HTTP API | **C** |
 | 6.5 | WebSocket live event stream | **C** |
 | 6.6 | MCP stdio server (`lai mcp`) | **C** |
-| 6.7 | Web dashboard | 1 |
+| 6.7 | Web dashboard | shipped as `lai web` — chat, live screen, settings | 1 |
 | 6.8 | Desktop overlay HUD (what agent sees/does) | 1 |
 | 6.9 | Tray icon + global hotkey | 1 |
 | 6.10 | Telegram / chat channel | 1 |
@@ -310,6 +310,60 @@ What that costs, stated where someone will find it before they are surprised:
 It is the answer to "I have no API key", not the recommended path. Verified
 end-to-end: a full observe→act→verify run through `claude -p`, two steps,
 sixteen seconds, no key anywhere.
+
+## Phase 5 — comfort
+
+Three complaints, one root: LAI was a set of commands rather than something you
+*sit in*. Phase 5 answers them.
+
+**A backend running out no longer ends the run.** Quotas are hit mid-task; that
+is when it hurts most. `provider.fallback` is an ordered chain — hosted keys,
+then signed-in coding CLIs, then local models — that is lazy (a standby is only
+built when it is reached), sticky (no flapping mid-task) and narrow about what
+counts: quota, auth and outages move on, a malformed request is raised, because
+it would fail identically everywhere. The switch is announced in every
+interface and written to the audit log. On by default; `LAI_FALLBACK=off`
+disables it.
+
+**`lai` is now a conversation.** The chat interface is the default command:
+prompt_toolkit history and completion when it is installed, plain input when it
+is not, and slash commands for everything you would otherwise quit for —
+`/model` (with a menu of what actually works), `/fallback`, `/mode`, `/status`,
+`/doctor`, `/observe`, `/new`. Changes persist to `config.toml`, so the choice
+survives the session.
+
+**`lai web` puts it in a browser.** One self-contained page served by the
+daemon — no CDN, no bundler, `default-src 'none'` — streaming the same SSE
+events the terminal renders, next to a live view of the actual screen. Settings
+switch backend and permission mode through the same code path the chat uses, so
+a choice made in a tab and a choice made in a terminal end up in the same file.
+
+### Security of the browser interface
+
+The daemon can drive the whole desktop, so the page is deliberately powerless
+on its own:
+
+- The token reaches the page in the URL **fragment**, which browsers never send
+  to a server — it cannot land in an access log or a proxy. From there it moves
+  to `sessionStorage`, scoped to the tab and dropped when the tab closes.
+- `GET /` needs no token and contains none; every endpoint that reads the
+  desktop or changes state demands one.
+- Only `/screen` accepts its token in the query string, because an `<img>` tag
+  cannot send a header. That exemption is tested to apply to nothing else.
+- No CORS headers are sent, so another origin cannot read a response; the token
+  is not a cookie, so nothing is attached automatically to a forged request.
+- Tool output is written with `textContent` everywhere. A window title is
+  untrusted input, and this page will never be the thing that executes it.
+
+### Defects found and fixed in phase 5
+
+18. **A large transcript killed the CLI backends** — the prompt was passed as a single argv entry, and Linux caps one at 128 KiB (`MAX_ARG_STRLEN`). With MCP servers connected the prompt sailed past it and `execve` failed with `E2BIG`, so a perfectly working `claude` reported "could not run claude: Argument list too long" three times and ended the run. Found live, in the browser, on the first real task. Prompts over 96 KB now go down stdin; a CLI that cannot read stdin gets a prompt truncated to fit instead.
+19. **`lai serve` and `lai web` ignored `--no-mcp`** — `serve()` built its own runtime with MCP always on, which is both slow and how defect 18 was reached in the first place.
+20. **The browser rendered every finished run twice** — the daemon ends a stream with `done` while the blocking API calls the same thing `result`; the page handled both.
+21. **A reload logged the browser out** — the token was read from the fragment and then erased from the URL, so refreshing the page left it with no credentials at all. It is kept in `sessionStorage` now.
+22. **`favicon.ico` answered 401** — browsers ask unprompted, and there is nothing secret about not having one; it is a 204 now.
+
+---
 
 ### Defects found and fixed in phase 4
 

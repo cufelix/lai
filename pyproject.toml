@@ -29,6 +29,11 @@ lai = "lai.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The browser interface is a single file served verbatim by the daemon; it has
+# to travel with the wheel or `lai web` serves a 500.
+"lai.web" = ["*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

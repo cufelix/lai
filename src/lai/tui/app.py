@@ -359,6 +359,13 @@ class LaiApp(App):
             extra = f" [dim](+{len(summary) - 1} lines)[/dim]" if len(summary) > 1 else ""
             image = " [magenta]+img[/magenta]" if payload.get("images") else ""
             self.write(f"  {mark} [dim]{head}[/dim]{extra}{image}")
+        elif kind == "provider_switch":
+            self.write(
+                f"[yellow]↻ {payload['from']} stepped aside[/yellow] "
+                f"[dim]({payload.get('reason') or 'unavailable'})[/dim]"
+            )
+            self.write(f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]")
+            bar.provider = f"{payload['to']}/{payload.get('model', '')}"
         elif kind == "compacting":
             self.write("[dim]… compacting context[/dim]")
         elif kind == "error":

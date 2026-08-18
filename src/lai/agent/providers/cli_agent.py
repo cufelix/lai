@@ -46,6 +46,12 @@ DEFAULT_TIMEOUT = 600.0
 MAX_PROMPT_CHARS = 400_000
 MAX_STAGED_IMAGES = 2
 
+# Linux caps a single argv entry at MAX_ARG_STRLEN (128 KiB). A full transcript
+# with 200+ tool schemas sails past that and execve fails with E2BIG — which is
+# how a working backend turns into "could not run claude". Anything bigger than
+# this goes down stdin instead.
+MAX_ARGV_CHARS = 96_000
+
 # An agent CLI fronts a hosted model, and hosted models have bad minutes. A
 # failure that smells like the network or the far end is worth waiting out —
 # three instant attempts all landing inside the same outage is how a
@@ -74,6 +80,12 @@ class CLISpec:
     """Arguments around the prompt; ``{prompt}`` marks where it goes, if at all."""
     stdin: bool = False
     """True when the prompt is delivered on stdin rather than as an argument."""
+    stdin_fallback: bool = False
+    """True when the CLI also reads the prompt from stdin if the argument is absent.
+
+    Used for long prompts: passing a whole transcript as one argv entry hits the
+    kernel's per-argument limit, and a CLI that can read stdin has no such cap.
+    """
     result_key: str = ""
     """Key holding the reply in JSON output; empty means the output is plain text."""
     model_flag: str = ""
@@ -102,15 +114,20 @@ class CLISpec:
         self, prompt: str, model: str = "", output_file: str = "", image_dir: str = ""
     ) -> tuple[list[str], str | None]:
         """Return (argv, stdin_payload)."""
+        via_stdin = self.stdin or (self.stdin_fallback and len(prompt) > MAX_ARGV_CHARS)
         argv = [self.command]
-        argv.extend(prompt if arg == "{prompt}" else arg for arg in self.args)
+        for arg in self.args:
+            if arg != "{prompt}":
+                argv.append(arg)
+            elif not via_stdin:
+                argv.append(prompt)
         if model and self.model_flag:
             argv.extend([self.model_flag, model])
         if output_file and self.output_file_flag:
             argv.extend([self.output_file_flag, output_file])
         if image_dir and self.image_args:
             argv.extend(arg.replace("{dir}", image_dir) for arg in self.image_args)
-        return argv, (prompt if self.stdin else None)
+        return argv, (prompt if via_stdin else None)
 
 
 # Each entry is one way somebody already has a model on their machine.
@@ -119,6 +136,7 @@ CLI_SPECS: dict[str, CLISpec] = {
         name="claude",
         command="claude",
         args=("-p", "{prompt}", "--output-format", "json"),
+        stdin_fallback=True,
         result_key="result",
         model_flag="--model",
         image_args=("--allowedTools", "Read", "--add-dir", "{dir}"),
@@ -138,6 +156,7 @@ CLI_SPECS: dict[str, CLISpec] = {
         name="gemini",
         command="gemini",
         args=("-o", "json", "{prompt}"),
+        stdin_fallback=True,
         result_key="response",
         model_flag="-m",
         image_args=("--include-directories", "{dir}"),
@@ -286,8 +305,13 @@ class CLIAgentProvider:
         )
 
     def _invoke(self, prompt: str, *, image_dir=None) -> str:
-        if len(prompt) > MAX_PROMPT_CHARS:
-            prompt = prompt[:MAX_PROMPT_CHARS] + "\n[transcript truncated]\n"
+        # A CLI that can only take the prompt as an argument is bounded by the
+        # kernel, not by us; truncating is the only alternative to E2BIG.
+        cap = MAX_PROMPT_CHARS
+        if not (self.spec.stdin or self.spec.stdin_fallback):
+            cap = min(cap, MAX_ARGV_CHARS)
+        if len(prompt) > cap:
+            prompt = prompt[:cap] + "\n[transcript truncated]\n"
 
         model = self.model if self.model != self.spec.name else ""
         # (0.0, 3.0, 8.0): the first try, then two waits spaced far enough apart

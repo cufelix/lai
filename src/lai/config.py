@@ -43,6 +43,12 @@ class ProviderConfig:
     temperature: float = 1.0
     thinking_budget: int = 0
     timeout: float = 180.0
+    fallback: tuple[str, ...] = ("auto",)
+    """Backends to try when this one refuses — quota, auth or an outage.
+
+    ``("auto",)`` means every other backend this machine can use, best first;
+    an explicit list pins the order; ``()`` disables failover entirely.
+    """
 
     def redacted(self) -> dict:
         return {
@@ -51,6 +57,7 @@ class ProviderConfig:
             "base_url": self.base_url,
             "api_key": ("set" if self.api_key else "unset"),
             "max_tokens": self.max_tokens,
+            "fallback": list(self.fallback),
         }
 
 
@@ -246,6 +253,22 @@ def _section(data: dict, name: str) -> dict:
     return value
 
 
+def _fallback_chain(env, provider_data: dict) -> tuple[str, ...]:
+    """Which backends stand in when the configured one refuses.
+
+    Defaults to ``auto`` — the machine's other working backends — because a run
+    dying at "usage limit reached" when a second key is sitting right there is
+    a failure nobody chose. ``LAI_FALLBACK=off`` (or an empty list) turns it off.
+    """
+    raw = env.get("LAI_FALLBACK", provider_data.get("fallback", "auto"))
+    if raw in (None, False):
+        return ()
+    chain = _tuple(raw, ("auto",))
+    if len(chain) == 1 and chain[0].lower() in ("off", "none", "false", "no", ""):
+        return ()
+    return chain
+
+
 def _tuple(value: Any, fallback: tuple[str, ...]) -> tuple[str, ...]:
     if value is None:
         return fallback
@@ -280,6 +303,7 @@ def load_config(
         temperature=float(provider_data.get("temperature", 1.0)),
         thinking_budget=int(env.get("LAI_THINKING", provider_data.get("thinking_budget", 0))),
         timeout=float(provider_data.get("timeout", 180.0)),
+        fallback=_fallback_chain(env, provider_data),
     )
 
     safety = SafetyConfig(

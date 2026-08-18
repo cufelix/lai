@@ -170,7 +170,8 @@ def test_post_requires_auth(daemon):
 
 def test_status_reports_the_runtime(daemon):
     body = httpx.get(f"{daemon['url']}/status", headers=auth(), timeout=5).json()
-    assert body["provider"] == {"name": "fake", "model": "fake-1"}
+    assert body["provider"]["name"] == "fake" and body["provider"]["model"] == "fake-1"
+    assert body["provider"]["chain"] == ["fake"], "a single backend is a chain of one"
     assert body["tools"] == 1
     assert body["busy"] is False
     assert "config" in body and body["config"]["provider"]["api_key"] in ("set", "unset")

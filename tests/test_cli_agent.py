@@ -421,3 +421,40 @@ def test_the_answer_file_is_cleaned_up(monkeypatch):
 def test_usage_is_reported_as_unknown_rather_than_guessed(monkeypatch):
     turn = provider(monkeypatch, '{"text": "x"}').complete([Message.user("hi")], tools=TOOLS)
     assert turn.usage.total == 0, "a CLI reports cost, not tokens; inventing a count would be a lie"
+
+
+# -- argv limits ---------------------------------------------------------
+
+
+def test_a_huge_prompt_goes_down_stdin_instead_of_argv():
+    """Linux caps one argv entry at 128 KiB; a full transcript sails past it."""
+    from lai.agent.providers.cli_agent import MAX_ARGV_CHARS
+
+    huge = "x" * (MAX_ARGV_CHARS + 10)
+    argv, stdin = CLI_SPECS["claude"].build(huge)
+    assert huge not in argv, "passing this as an argument fails with E2BIG"
+    assert stdin == huge
+    assert "-p" in argv and "--output-format" in argv
+
+
+def test_a_small_prompt_still_goes_in_the_argument():
+    argv, stdin = CLI_SPECS["claude"].build("hello")
+    assert "hello" in argv and stdin is None
+
+
+def test_a_cli_that_cannot_read_stdin_gets_a_truncated_prompt(monkeypatch):
+    """opencode takes the prompt only as an argument, so it must be capped."""
+    from lai.agent.providers.cli_agent import MAX_ARGV_CHARS
+
+    calls: list = []
+    spec = CLI_SPECS["opencode"]
+    p = provider(monkeypatch, '{"text": "ok"}', spec=spec, record=calls)
+    p.complete([Message.user("y" * 500_000)], tools=TOOLS)
+    argv = calls[0][0]
+    assert max(len(arg) for arg in argv) <= MAX_ARGV_CHARS + 200
+    assert "[transcript truncated]" in "".join(argv)
+
+
+def test_codex_always_uses_stdin_regardless_of_size():
+    argv, stdin = CLI_SPECS["codex"].build("short")
+    assert stdin == "short" and "short" not in argv

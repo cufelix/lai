@@ -85,14 +85,14 @@ LAI_REF=v0.2       …| sh        # a tag or branch
 Prefer to read it first? That is the better instinct:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/lai/main/packaging/bootstrap.sh -o lai-install.sh
+curl -fsSL https://raw.githubusercontent.com/cufelix/lai/main/packaging/bootstrap.sh -o lai-install.sh
 less lai-install.sh && sh lai-install.sh
 ```
 
 Or clone and run the installer directly:
 
 ```bash
-git clone https://github.com/OWNER/lai.git && cd lai && ./packaging/install.sh
+git clone https://github.com/cufelix/lai.git && cd lai && ./packaging/install.sh
 ```
 
 ### Setup
@@ -254,9 +254,10 @@ script if you already have one. If a key is already in your environment,
 ## Use
 
 ```bash
-lai                             # setup if new, otherwise the full-screen interface
+lai                             # setup if new, otherwise the chat interface
 lai do "<task>"                 # one autonomous run
-lai tui                         # the full-screen interface, explicitly
+lai web                         # the same agent, in your browser
+lai tui                         # full-screen dashboard
 lai repl                        # plain interactive session
 lai doctor                      # environment diagnostics
 lai observe                     # print exactly what the agent sees right now
@@ -271,6 +272,48 @@ lai mcp                         # expose the desktop over MCP (see below)
 ```
 
 ### The interface
+
+Type `lai` and you are talking to it:
+
+```
+LAI v0.4.0 — your desktop, driven
+zai/glm-5.2 · mode ask · 53 tools · 38 skills
+failover ready: cli:claude → cli:codex → ollama
+
+Say what you want done. /help for commands.
+
+› open the text editor and write me a haiku about X11
+```
+
+Slash commands cover everything you would otherwise have to quit for:
+
+| | |
+|---|---|
+| `/model` | switch backend — with no argument it offers a menu of what works |
+| `/fallback` | the standby order when a backend refuses (`auto`, a list, or `off`) |
+| `/mode` | `readonly` · `ask` · `auto` · `yolo` |
+| `/status` | who is answering, what stands behind them, what already stepped aside |
+| `/doctor` `/observe` `/tools` `/skills` | inspect without leaving |
+| `/new` | forget this conversation and start clean |
+
+Everything you change is written to `~/.lai/config.toml`, so the next start
+remembers it. History and tab-completion come from prompt_toolkit when it is
+installed; without it, the same interface runs on plain input.
+
+### In the browser
+
+```bash
+lai web            # opens http://127.0.0.1:8787/#<token>
+```
+
+The same agent, the same desktop gate, reached from a tab: streaming tool
+calls, a live view of the actual screen next to the conversation, and a
+settings sheet that switches backend or permission mode without touching a
+file. The page is one self-contained file served by the daemon — no CDN, no
+bundler, a strict `default-src 'none'` policy — and the token travels in the
+URL *fragment*, which browsers never send to a server.
+
+### The dashboard
 
 `lai tui` gives you the agent with its work visible next to it:
 
@@ -299,8 +342,31 @@ Permission prompts appear as a modal where you are already looking — `y` allow
 `n` refuses. `ctrl+c` interrupts, `f2` cycles permission mode, `f5` re-observes,
 `ctrl+n` starts a fresh session.
 
-Useful flags on `do` / `repl`: `--mode`, `--model`, `--provider`, `--steps`,
-`--timeout`, `--dry-run`, `--json`, `--verbose`.
+Useful flags on `do` / `chat` / `tui`: `--mode`, `--model`, `--provider`,
+`--steps`, `--timeout`, `--dry-run`, `--json`, `--verbose`.
+
+### When a backend runs out
+
+Subscriptions hit quotas and hosted endpoints have bad minutes, usually
+half-way through something. LAI treats that as a reason to carry on, not to
+stop:
+
+```
+▸ computer_drag {"from": [350, 320], "to": [550, 320]}
+  ✓ dragged
+↻ zai stepped aside (HTTP 429 rate_limit_error: Usage limit reached for 5 hour)
+  continuing on cli:claude/claude
+▸ screenshot {}
+```
+
+The chain is ordered (hosted keys, then signed-in coding CLIs, then local
+models — a 2B model on the CPU is a last resort, not a first choice), lazy
+(a standby is only built when it is reached) and sticky (no flapping between
+two models mid-task). Only failures another backend could plausibly survive
+move the run on — quota, auth, an outage; a malformed request is raised, since
+it would fail identically everywhere.
+
+`/fallback off` or `LAI_FALLBACK=off` turns it off.
 
 ### Permission modes
 

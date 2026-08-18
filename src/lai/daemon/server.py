@@ -122,12 +122,71 @@ class Handler(BaseHTTPRequestHandler):
         supplied = header[7:].strip() if header.lower().startswith("bearer ") else ""
         if not supplied:
             supplied = self.headers.get("X-LAI-Token", "").strip()
+        if not supplied:
+            # An <img> tag cannot send a header, so the live desktop view — and
+            # only that — may carry its token in the query string. Everything
+            # that changes state still requires the header.
+            supplied = self._query_token()
         return secrets.compare_digest(supplied, state.token)
+
+    def _query_token(self) -> str:
+        path, _, query = self.path.partition("?")
+        if path.rstrip("/") != "/screen" or not query:
+            return ""
+        from urllib.parse import parse_qs  # noqa: PLC0415
+
+        return (parse_qs(query).get("token") or [""])[0].strip()
 
     def _send(self, status: int, payload: dict | list, *, content_type: str = "application/json") -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_page(self) -> None:
+        from ..web import page  # noqa: PLC0415
+
+        try:
+            body = page()
+        except OSError as exc:
+            self._send(500, {"error": "no_ui", "message": str(exc)})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # Served straight from disk, so an upgrade must not leave a stale page
+        # talking to a newer daemon.
+        self.send_header("Cache-Control", "no-store")
+        # The page talks only to its own origin; forbidding everything else
+        # means a compromised dependency has nowhere to send the desktop.
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+            "script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; base-uri 'none'",
+        )
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_screenshot(self, runtime) -> None:
+        """A still of the desktop, for the browser's live panel."""
+        try:
+            body = runtime.desktop.screen.grab().png
+        except Exception as exc:
+            self._send(503, {"error": "no_screen", "message": str(exc)})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -155,6 +214,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send(200, self._health())
             return
+        if path == "/favicon.ico":
+            # Browsers ask unprompted; a 401 here is noise in the log and in
+            # the console, and there is nothing secret about not having one.
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path in ("/", "/index.html"):
+            # The page itself carries no secrets — the token reaches it through
+            # the URL fragment, which the browser never sends anywhere.
+            self._send_page()
+            return
         if not self._authorized():
             self._send(401, {"error": "unauthorized", "hint": "send Authorization: Bearer <token>"})
             return
@@ -180,6 +251,16 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/channels":
                 manager = state.channels
                 self._send(200, manager.status() if manager else {"channels": [], "enabled": False})
+            elif path == "/models":
+                from ..chat import backends as backend_tools  # noqa: PLC0415
+
+                found = backend_tools.catalogue()
+                self._send(200, {
+                    "active": runtime.provider.name if runtime.provider else "",
+                    "backends": [b.to_dict() for b in found],
+                })
+            elif path == "/screen":
+                self._send_screenshot(runtime)
             else:
                 self._send(404, {"error": "not_found", "path": path})
         except LaiError as exc:
@@ -216,6 +297,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "rejected", "message": "bad signature or empty text"})
             else:
                 self._send(202, {"accepted": True, "route": accepted.route})
+            return
+
+        if path in ("/provider", "/mode"):
+            from ..chat import backends as backend_tools  # noqa: PLC0415
+
+            body = self._read_json()
+            try:
+                if path == "/mode":
+                    self._send(200, {"mode": backend_tools.set_mode(state.runtime, str(body.get("mode", "")))})
+                elif body.get("fallback") is not None:
+                    wanted = str(body["fallback"]).strip().lower()
+                    chain = backend_tools.set_fallback(
+                        state.runtime, [] if wanted in ("off", "none", "") else [wanted]
+                    )
+                    self._send(200, {"fallback": chain})
+                else:
+                    label = backend_tools.use(state.runtime, str(body.get("name", "")),
+                                              model=str(body.get("model", "")))
+                    self._send(200, {"provider": label})
+            except (LaiError, ValueError) as exc:
+                self._send(400, {"error": "rejected", "message": str(exc)})
             return
 
         if path == "/stop":
@@ -371,7 +473,13 @@ class Handler(BaseHTTPRequestHandler):
             "current_task": state.current_task,
             "completed": state.completed,
             "failed": state.failed,
-            "provider": {"name": provider.name, "model": provider.model} if provider else None,
+            "provider": {
+                "name": provider.name,
+                "model": provider.model,
+                "chain": list(getattr(provider, "chain", []) or [provider.name]),
+                "failures": dict(getattr(provider, "failures", {}) or {}),
+                "fallback": list(runtime.config.provider.fallback),
+            } if provider else None,
             "provider_error": runtime.provider_error,
             "mode": runtime.config.safety.mode,
             "tools": len(runtime.registry),
@@ -440,6 +548,7 @@ def serve(
     port: int = DEFAULT_PORT,
     token: str | None = None,
     allow_remote: bool = False,
+    with_mcp: bool = True,
 ) -> None:
     """Run the daemon until interrupted."""
     config = config or load_config()
@@ -458,7 +567,7 @@ def serve(
             "and set a strong token",
         )
 
-    runtime = build_runtime(config)
+    runtime = build_runtime(config, with_mcp=with_mcp)
     resolved_token = token if token is not None else _load_or_create_token(config)
     state = DaemonState(runtime=runtime, token=resolved_token)
 

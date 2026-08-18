@@ -1,0 +1,437 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LAI</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1115; --panel: #161922; --line: #262b38; --text: #e6e9ef;
+    --dim: #8b93a7; --accent: #5eb0ff; --ok: #4ade80; --bad: #f87171;
+    --warn: #fbbf24; --user: #1e2636;
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f8fa; --panel: #fff; --line: #e2e5ec; --text: #14161c;
+      --dim: #6b7280; --accent: #0b62d0; --user: #eef2fb;
+    }
+  }
+  * { box-sizing: border-box; }
+  /* `all: unset` on the buttons below also unsets the UA rule that makes
+     [hidden] disappear, so state them again with weight. */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-family: var(--font);
+    height: 100dvh; display: grid; grid-template-rows: auto 1fr auto;
+  }
+  header {
+    display: flex; align-items: center; gap: .6rem; padding: .6rem .9rem;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .brand { font-weight: 700; letter-spacing: .02em; }
+  .chip {
+    font: 500 .75rem/1 var(--mono); padding: .34rem .5rem; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim); white-space: nowrap;
+  }
+  .chip.live { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .chip button, .iconbtn {
+    all: unset; cursor: pointer; color: inherit;
+  }
+  .iconbtn {
+    padding: .34rem .6rem; border: 1px solid var(--line); border-radius: 8px;
+    font-size: .8rem; color: var(--dim);
+  }
+  .iconbtn:hover { color: var(--text); border-color: var(--accent); }
+  .spacer { flex: 1; }
+
+  main { display: grid; grid-template-columns: 1fr; overflow: hidden; }
+  main.with-screen { grid-template-columns: 1fr 340px; }
+  @media (max-width: 860px) { main.with-screen { grid-template-columns: 1fr; } aside { display: none; } }
+
+  #feed { overflow-y: auto; padding: 1rem 1.1rem 2rem; scroll-behavior: smooth; }
+  .msg { max-width: 62ch; margin: 0 auto 1rem; }
+  .msg.user {
+    background: var(--user); border: 1px solid var(--line); border-radius: 12px;
+    padding: .6rem .8rem; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .msg.agent { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+  .tool {
+    max-width: 62ch; margin: 0 auto .3rem; font: .8rem/1.5 var(--mono);
+    display: flex; gap: .5rem; align-items: baseline;
+  }
+  .tool .name { color: var(--accent); white-space: nowrap; }
+  /* Both grow, both clip: a long argument must not push the outcome off the
+     row, and neither may wrap the tool's name onto its own line. */
+  .tool .args, .tool .out {
+    color: var(--dim); flex: 1 1 0; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tool.bad .out { color: var(--bad); }
+  .note {
+    max-width: 62ch; margin: .6rem auto; font-size: .82rem; color: var(--dim);
+    border-left: 2px solid var(--line); padding-left: .7rem;
+  }
+  .note.switch { color: var(--warn); border-color: var(--warn); }
+  .note.error { color: var(--bad); border-color: var(--bad); }
+  .result { max-width: 62ch; margin: .8rem auto; padding-top: .6rem; border-top: 1px solid var(--line);
+            font-size: .85rem; color: var(--dim); }
+  .result b { color: var(--text); }
+
+  aside { border-left: 1px solid var(--line); background: var(--panel); padding: .8rem; overflow-y: auto; }
+  aside h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 .5rem; }
+  #screen { width: 100%; border-radius: 8px; border: 1px solid var(--line); display: block; }
+
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: .7rem .9rem; }
+  form { display: flex; gap: .5rem; max-width: 70ch; margin: 0 auto; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; min-height: 2.6rem; max-height: 9rem; padding: .6rem .7rem;
+    border-radius: 10px; border: 1px solid var(--line); background: var(--bg);
+    color: var(--text); font: inherit; font-size: .95rem;
+  }
+  textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+  button.send, button.stop {
+    all: unset; cursor: pointer; padding: .6rem 1rem; border-radius: 10px; font-weight: 600;
+    background: var(--accent); color: #fff;
+  }
+  button.stop { background: var(--bad); }
+  button[disabled] { opacity: .45; cursor: not-allowed; }
+  .hint { max-width: 70ch; margin: .45rem auto 0; font-size: .74rem; color: var(--dim); }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text);
+    padding: 0; width: min(560px, 92vw); max-height: min(80dvh, 46rem); overflow: auto;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  .sheet { padding: 1rem 1.1rem 1.2rem; }
+  .sheet h3 { margin: 0 0 .2rem; font-size: 1rem; }
+  .sheet p { margin: 0 0 1rem; color: var(--dim); font-size: .84rem; }
+  .row { display: flex; align-items: center; gap: .6rem; padding: .45rem 0; border-top: 1px solid var(--line); }
+  .row:first-of-type { border-top: 0; }
+  .row .grow { flex: 1; min-width: 0; }
+  .row .sub { display: block; font-size: .76rem; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { font: 500 .7rem var(--mono); padding: .15rem .45rem; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .pill.ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+  .pill.auth { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+  select, input[type=text] {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: .35rem .5rem; font: inherit; font-size: .85rem;
+  }
+  .empty { max-width: 62ch; margin: 3rem auto; color: var(--dim); }
+  .empty h1 { color: var(--text); font-size: 1.15rem; margin: 0 0 .4rem; }
+  .examples { display: grid; gap: .4rem; margin-top: 1rem; }
+  .examples button {
+    all: unset; cursor: pointer; padding: .55rem .7rem; border: 1px solid var(--line);
+    border-radius: 10px; font-size: .87rem;
+  }
+  .examples button:hover { border-color: var(--accent); color: var(--text); }
+</style>
+
+<header>
+  <span class="brand">LAI</span>
+  <span class="chip live" id="who">connecting…</span>
+  <span class="chip" id="modeChip">–</span>
+  <span class="chip" id="standby" hidden></span>
+  <span class="spacer"></span>
+  <button class="iconbtn" id="screenToggle" title="Live desktop">screen</button>
+  <button class="iconbtn" id="openSettings">settings</button>
+</header>
+
+<main id="main">
+  <div id="feed">
+    <div class="empty" id="empty">
+      <h1>Your desktop, driven.</h1>
+      <p>Say what you want done. LAI opens the real applications on this machine,
+         reads them, and works until it is finished.</p>
+      <div class="examples">
+        <button data-task="what windows do I have open?">what windows do I have open?</button>
+        <button data-task="open the calculator and work out 12 * 34">open the calculator and work out 12 * 34</button>
+        <button data-task="take a screenshot and tell me what you see">take a screenshot and tell me what you see</button>
+      </div>
+    </div>
+  </div>
+  <aside id="side" hidden>
+    <h2>Desktop</h2>
+    <img id="screen" alt="live view of the desktop">
+  </aside>
+</main>
+
+<footer>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Tell me what to do on this desktop…" autofocus></textarea>
+    <button class="send" id="send" type="submit">Run</button>
+    <button class="stop" id="stop" type="button" hidden>Stop</button>
+  </form>
+  <div class="hint">Enter to run · Shift+Enter for a new line</div>
+</footer>
+
+<dialog id="settings">
+  <div class="sheet">
+    <h3>Settings</h3>
+    <p>Changes are saved to <code>~/.lai/config.toml</code> and apply immediately.</p>
+
+    <div class="row">
+      <div class="grow"><b>Permission mode</b>
+        <span class="sub">how much it may do without asking</span></div>
+      <select id="modeSelect">
+        <option value="readonly">readonly — look, never touch</option>
+        <option value="ask">ask — confirm anything risky</option>
+        <option value="auto">auto — act, confirm shell</option>
+        <option value="yolo">yolo — no prompts</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div class="grow"><b>Failover</b>
+        <span class="sub" id="fallbackSub">when a backend hits its quota, move on</span></div>
+      <select id="fallbackSelect">
+        <option value="auto">auto — every working backend</option>
+        <option value="off">off — stop instead</option>
+      </select>
+    </div>
+
+    <h2 style="margin-top:1rem">Backends</h2>
+    <div id="backends"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="iconbtn" id="closeSettings">done</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  "use strict";
+  // The token arrives in the URL fragment: fragments are never sent to a
+  // server, so it cannot leak into logs or a proxy, and a page fetched by
+  // anything but `lai web` simply has no credentials. It is then moved into
+  // sessionStorage — scoped to this tab and dropped when the tab closes — so
+  // that reloading the page does not silently lock the user out.
+  const KEY = "lai.token";
+  const fromHash = decodeURIComponent((location.hash || "").replace(/^#/, "")).trim();
+  if (fromHash) {
+    try { sessionStorage.setItem(KEY, fromHash); } catch { /* private mode */ }
+    history.replaceState(null, "", location.pathname);
+  }
+  let stored = "";
+  try { stored = sessionStorage.getItem(KEY) || ""; } catch { stored = ""; }
+  const token = fromHash || stored;
+
+  const $ = (id) => document.getElementById(id);
+  const feed = $("feed"), input = $("input"), composer = $("composer");
+  const sendBtn = $("send"), stopBtn = $("stop"), empty = $("empty");
+  let running = false, streamBuffer = null, finished = false, spoke = false;
+
+  const headers = () => token ? { "Authorization": "Bearer " + token } : {};
+  const api = (path, options = {}) => fetch(path, {
+    ...options,
+    headers: { ...headers(), ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) },
+  });
+
+  // -- rendering (textContent everywhere: tool output is untrusted) ------
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const put = (node) => {
+    empty?.remove();
+    feed.appendChild(node);
+    feed.scrollTop = feed.scrollHeight;
+    return node;
+  };
+
+  function toolRow(name, args) {
+    const row = el("div", "tool");
+    row.appendChild(el("span", "name", "▸ " + name));
+    row.appendChild(el("span", "args", args));
+    return put(row);
+  }
+
+  // -- run --------------------------------------------------------------
+  async function run(task) {
+    if (running || !task.trim()) return;
+    running = true;
+    sendBtn.hidden = true; stopBtn.hidden = false; input.value = "";
+    put(el("div", "msg user", task));
+    streamBuffer = null;
+    finished = false;
+    spoke = false;
+
+    let lastTool = null;
+    const response = await api("/task", {
+      method: "POST",
+      body: JSON.stringify({ task, stream: true }),
+    });
+    if (!response.ok || !response.body) {
+      put(el("div", "note error", response.status === 401
+        ? "Not authorised — restart with `lai web` so the page gets a token."
+        : "The daemon refused: HTTP " + response.status));
+      return finish();
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop();
+      for (const chunk of chunks) {
+        const line = chunk.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        let event;
+        try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        handle(event, (t) => (lastTool = t), () => lastTool);
+      }
+    }
+    finish();
+  }
+
+  function handle(event, setTool, getTool) {
+    switch (event.kind) {
+      case "text":
+        spoke = true;
+        if (!streamBuffer) streamBuffer = put(el("div", "msg agent", ""));
+        streamBuffer.textContent += event.delta || "";
+        feed.scrollTop = feed.scrollHeight;
+        break;
+      case "tool_call":
+        streamBuffer = null;
+        setTool(toolRow(event.name, JSON.stringify(event.input || {}).slice(0, 120)));
+        break;
+      case "tool_result": {
+        const row = getTool();
+        if (!row) break;
+        const mark = event.ok ? "✓" : "✗";
+        if (!event.ok) row.classList.add("bad");
+        row.appendChild(el("span", "out", mark + " " + String(event.summary || "").split("\n")[0].slice(0, 90)));
+        if (event.images) refreshScreen();
+        break;
+      }
+      case "provider_switch":
+        put(el("div", "note switch",
+          `${event.from} stepped aside (${event.reason || "unavailable"}) — now using ${event.to}/${event.model}`));
+        refreshStatus();
+        break;
+      case "error":
+        put(el("div", "note error", event.error || event.message || "error"));
+        break;
+      // The daemon ends a stream with `done`; `result` is the blocking API's
+      // name for the same thing. Rendering both would print every run twice.
+      case "done":
+      case "result": {
+        if (finished) break;
+        finished = true;
+        const line = el("div", "result");
+        line.appendChild(el("b", null, (event.ok ? "✓ " : "✗ ") + (event.status || "")));
+        line.appendChild(el("span", null, ` · ${event.steps || 0} steps · ${Math.round(event.elapsed || 0)}s`));
+        put(line);
+        // The summary repeats what was already streamed; show it only when
+        // the model never said anything out loud.
+        if (event.summary && !spoke) put(el("div", "msg agent", event.summary));
+        break;
+      }
+    }
+  }
+
+  function finish() {
+    running = false;
+    sendBtn.hidden = false; stopBtn.hidden = true;
+    input.focus();
+    refreshScreen();
+  }
+
+  composer.addEventListener("submit", (e) => { e.preventDefault(); run(input.value); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(input.value); }
+  });
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 144) + "px";
+  });
+  stopBtn.addEventListener("click", () => api("/stop", { method: "POST" }));
+  feed.addEventListener("click", (e) => {
+    const task = e.target?.dataset?.task;
+    if (task) run(task);
+  });
+
+  // -- status, screen, settings -----------------------------------------
+  async function refreshStatus() {
+    try {
+      const response = await api("/status");
+      if (response.status === 401) return unauthorised();
+      const status = await response.json();
+      const provider = status.provider || {};
+      $("who").textContent = provider.name ? `${provider.name}/${provider.model}` : "no model";
+      $("modeChip").textContent = status.mode || "";
+      const standbys = (provider.chain || []).slice(1);
+      $("standby").hidden = standbys.length === 0;
+      $("standby").textContent = standbys.length ? "↻ " + standbys.slice(0, 2).join(" → ") : "";
+      $("modeSelect").value = status.mode || "ask";
+      $("fallbackSelect").value = (provider.fallback || []).length ? "auto" : "off";
+    } catch { $("who").textContent = "daemon unreachable"; }
+  }
+
+  function unauthorised() {
+    $("who").textContent = "no token";
+    put(el("div", "note error",
+      "This page has no token. Start it with `lai web`, which opens the URL that carries one."));
+  }
+
+  let screenOn = false;
+  function refreshScreen() {
+    if (!screenOn) return;
+    $("screen").src = "/screen?token=" + encodeURIComponent(token) + "&t=" + Date.now();
+  }
+  $("screenToggle").addEventListener("click", () => {
+    screenOn = !screenOn;
+    $("side").hidden = !screenOn;
+    $("main").classList.toggle("with-screen", screenOn);
+    refreshScreen();
+  });
+
+  async function refreshBackends() {
+    const box = $("backends");
+    box.textContent = "loading…";
+    let data;
+    try { data = await (await api("/models")).json(); } catch { box.textContent = "unavailable"; return; }
+    box.textContent = "";
+    for (const backend of (data.backends || []).slice(0, 24)) {
+      const row = el("div", "row");
+      const label = el("div", "grow");
+      label.appendChild(el("b", null, backend.name));
+      label.appendChild(el("span", "sub", `${backend.model || backend.kind} — ${backend.detail || ""}`));
+      row.appendChild(label);
+      row.appendChild(el("span", "pill " + (backend.status === "ready" ? "ready" : backend.status === "auth" ? "auth" : ""), backend.status));
+      if (backend.status === "ready") {
+        const use = el("button", "iconbtn", data.active === backend.name ? "in use" : "use");
+        use.disabled = data.active === backend.name;
+        use.addEventListener("click", async () => {
+          use.textContent = "…";
+          await api("/provider", { method: "POST", body: JSON.stringify({ name: backend.name }) });
+          await refreshStatus(); await refreshBackends();
+        });
+        row.appendChild(use);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  $("openSettings").addEventListener("click", () => { $("settings").showModal(); refreshBackends(); });
+  $("closeSettings").addEventListener("click", () => $("settings").close());
+  $("modeSelect").addEventListener("change", async (e) => {
+    await api("/mode", { method: "POST", body: JSON.stringify({ mode: e.target.value }) });
+    refreshStatus();
+  });
+  $("fallbackSelect").addEventListener("change", async (e) => {
+    await api("/provider", { method: "POST", body: JSON.stringify({ fallback: e.target.value }) });
+    refreshStatus();
+  });
+
+  refreshStatus();
+  setInterval(() => { if (screenOn && !running) refreshScreen(); }, 4000);
+})();
+</script>

@@ -203,13 +203,37 @@ def _ollama_model() -> str:
     return models[0]
 
 
-def build_provider(config: ProviderConfig) -> Provider:
-    """Instantiate the configured provider (or auto-detect one)."""
+def build_provider(config: ProviderConfig, *, on_switch=None) -> Provider:
+    """Instantiate the configured provider, with its fallback chain behind it.
+
+    ``on_switch(from_name, to_name, reason)`` is called if a run has to move to
+    a standby backend, so the interface can say so rather than silently
+    answering as somebody else.
+    """
+    chain = build_chain(config)
+    if len(chain) == 1:
+        return chain[0].build()
+
+    from .fallback import FallbackProvider  # noqa: PLC0415
+
+    return FallbackProvider(chain, on_switch=on_switch)
+
+
+def build_chain(config: ProviderConfig) -> list:
+    """The ordered backends this configuration may use, best first.
+
+    Every entry is lazy: building a provider can probe a socket or shell out to
+    a CLI, and a standby that is never reached should cost nothing.
+    """
+    from dataclasses import replace  # noqa: PLC0415
+
+    from .fallback import Candidate  # noqa: PLC0415
+
+    credentials = discover_credentials()
     name = (config.name or "auto").lower()
 
     if name == "auto":
-        candidates = discover_credentials()
-        if not candidates:
+        if not credentials:
             raise ProviderError(
                 "no model backend available",
                 detail=(
@@ -217,11 +241,34 @@ def build_provider(config: ProviderConfig) -> Provider:
                     "OPENROUTER_API_KEY, or run a local ollama. See `lai doctor`."
                 ),
             )
-        chosen = candidates[0]
-        return _instantiate(chosen.provider, config, chosen)
+        name = credentials[0].provider
 
-    credential = next((c for c in discover_credentials() if c.provider == name), None)
-    return _instantiate(name, config, credential)
+    primary = next((c for c in credentials if c.provider == name), None)
+    chain = [Candidate(name, lambda: _instantiate(name, config, primary))]
+
+    wanted = tuple(config.fallback or ())
+    if not wanted:
+        return chain
+    if len(wanted) == 1 and wanted[0].lower() == "auto":
+        wanted = tuple(_by_capability(credentials))
+
+    seen = {name}
+    for candidate_name in wanted:
+        standby = candidate_name.strip().lower()
+        if not standby or standby in seen or standby == "auto":
+            continue
+        seen.add(standby)
+        credential = next((c for c in credentials if c.provider == standby), None)
+        # A standby never inherits the primary's key, model or URL — a z.ai key
+        # aimed at Anthropic is not a fallback, it is a confusing 401.
+        neutral = replace(config, name=standby, model="", api_key="", base_url="")
+        chain.append(
+            Candidate(
+                standby,
+                lambda n=standby, cfg=neutral, cred=credential: _instantiate(n, cfg, cred),
+            )
+        )
+    return chain
 
 
 def _instantiate(name: str, config: ProviderConfig, credential: Credential | None) -> Provider:
@@ -291,6 +338,25 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
         f"unknown provider {name!r}",
         detail="run `lai models` to see everything this machine can use",
     )
+
+
+def _by_capability(credentials: list[Credential]) -> list[str]:
+    """Order standbys by how well they can actually finish the job.
+
+    Discovery order encodes "what should answer by default", which is not the
+    same question. A 2B model running on the CPU is a fine last resort and a
+    poor second choice: when a hosted key hits its quota, a signed-in coding
+    CLI carries a frontier model and will finish the task, so it goes first.
+    """
+    hosted, cli, local = [], [], []
+    for credential in credentials:
+        if credential.provider.startswith("cli:"):
+            cli.append(credential.provider)
+        elif credential.provider in ("ollama",) or not credential.api_key:
+            local.append(credential.provider)
+        else:
+            hosted.append(credential.provider)
+    return hosted + cli + local
 
 
 def _cli_names() -> set[str]:

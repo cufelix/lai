@@ -262,12 +262,24 @@ class Agent:
             elif kind == "tool":
                 self._emit("tool_start", {"name": payload})
 
-        return self.provider.complete(
-            self.session.messages,
-            system=self._system_prompt,
-            tools=self.registry.to_anthropic(),
-            stream=stream,
-        )
+        was = self.provider.name
+        try:
+            return self.provider.complete(
+                self.session.messages,
+                system=self._system_prompt,
+                tools=self.registry.to_anthropic(),
+                stream=stream,
+            )
+        finally:
+            # A fallback chain answers as whichever backend actually replied, so
+            # the change of identity is the only signal a switch happened — and
+            # the user must be told, not quietly served by a different model.
+            now = self.provider.name
+            if now != was:
+                reason = getattr(self.provider, "failures", {}).get(was, "")
+                self._emit("provider_switch", {"from": was, "to": now,
+                                               "model": self.provider.model, "reason": reason})
+                self.audit.write("provider_switch", **{"from": was, "to": now, "reason": reason})
 
     def _tool_context(self) -> ToolContext:
         return ToolContext(

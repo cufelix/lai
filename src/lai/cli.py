@@ -34,9 +34,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "setup": ("start here", "Guided first-run setup: model, permissions, self-check"),
     "doctor": ("start here", "Check the environment — --fix repairs what it can"),
     "models": ("start here", "Model backends: list, test one, pick a default"),
+    "chat": ("run tasks", "Talk to it — the default when you just type `lai`"),
     "do": ("run tasks", "Run one task autonomously"),
-    "repl": ("run tasks", "Interactive session in the terminal"),
+    "repl": ("run tasks", "Plain interactive session (no prompt niceties)"),
     "tui": ("run tasks", "Full-screen dashboard: live view, costs, approvals"),
+    "web": ("run tasks", "Open the same agent in your browser"),
     "observe": ("inspect", "Print what the agent currently sees"),
     "sessions": ("inspect", "List or inspect past sessions"),
     "tools": ("inspect", "List available tools"),
@@ -47,6 +49,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "mcp": ("connect", "Expose desktop tools over MCP to Claude Code"),
 }
 EXAMPLES = [
+    ("lai", "the chat interface — say what you want, watch it happen"),
     ('lai do "open firefox and find the weather for prague"', "just do one thing"),
     ("lai models use cli:claude", "think with an installed coding CLI, no API key"),
     ("lai tui", "watch it work in real time"),
@@ -226,6 +229,14 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
             image = " [magenta]+image[/magenta]" if payload.get("images") else ""
             out.write(f"  {mark} [dim]{first}[/dim]{extra}{image}")
             spin()
+        elif kind == "provider_switch":
+            halt()
+            reason = payload.get("reason") or "unavailable"
+            out.write(
+                f"[yellow]↻ {payload['from']} stepped aside[/yellow] [dim]({reason})[/dim]\n"
+                f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]"
+            )
+            spin()
         elif kind == "compacting":
             halt()
             out.write(f"[dim]… compacting context ({payload['estimated_tokens']} tokens)[/dim]")
@@ -277,6 +288,19 @@ def cmd_do(args) -> int:
                 f"session {result.session_id}[/dim]"
             )
         return 0 if result.ok else 1
+    finally:
+        runtime.close()
+
+
+def cmd_chat(args) -> int:
+    """The conversational interface — what bare `lai` runs."""
+    config = _apply_overrides(load_config(), args)
+    runtime = build_runtime(config, with_mcp=not args.no_mcp)
+    try:
+        from .chat import run_chat  # noqa: PLC0415
+
+        return run_chat(runtime, out=Out(), task=getattr(args, "task", "") or "",
+                        verbose=getattr(args, "verbose", False))
     finally:
         runtime.close()
 
@@ -596,6 +620,7 @@ def cmd_serve(args) -> int:
             host=args.host,
             port=args.port,
             allow_remote=args.allow_remote,
+            with_mcp=not args.no_mcp,
         )
     except LaiError as exc:
         Out().error(str(exc))
@@ -621,6 +646,42 @@ def cmd_tui(args) -> int:
     finally:
         runtime.close()
     return 0
+
+
+def cmd_web(args) -> int:
+    """Serve the browser interface — the same agent, reached from a tab."""
+    from .daemon.server import _load_or_create_token, serve  # noqa: PLC0415
+    from .web import url as web_url  # noqa: PLC0415
+
+    out = Out()
+    config = _apply_overrides(load_config(), args)
+    config.ensure_dirs()
+    token = _load_or_create_token(config)
+    address = web_url(args.host, args.port, token)
+
+    out.write(f"[bold]LAI in your browser[/bold] [dim]— {address.split('#')[0]}[/dim]")
+    out.write("[dim]The link carries this machine's daemon token. Anyone with it can drive[/dim]")
+    out.write("[dim]your desktop, so keep it to yourself. Ctrl+C stops the server.[/dim]")
+    out.write("")
+    if not args.no_open and _open_browser(address):
+        out.write("[green]opened your browser[/green]")
+    else:
+        out.write("Open this:")
+        out.write(f"  [cyan]{address}[/cyan]")
+    out.write("")
+
+    serve(config, host=args.host, port=args.port, token=token,
+          allow_remote=args.allow_remote, with_mcp=not args.no_mcp)
+    return 0
+
+
+def _open_browser(address: str) -> bool:
+    import webbrowser  # noqa: PLC0415
+
+    try:
+        return webbrowser.open(address, new=2)
+    except Exception:
+        return False
 
 
 def cmd_channels(args) -> int:
@@ -961,6 +1022,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_agent_flags(p_do)
     p_do.set_defaults(func=cmd_do)
 
+    p_chat = sub.add_parser(
+        "chat",
+        help=_help("chat"),
+        epilog="Slash commands inside: /model /fallback /mode /doctor /help.",
+    )
+    p_chat.add_argument("task", nargs="?", default="", help="Optional first task")
+    add_agent_flags(p_chat)
+    p_chat.set_defaults(func=cmd_chat)
+
     p_repl = sub.add_parser("repl", help=_help("repl"))
     add_agent_flags(p_repl)
     p_repl.set_defaults(func=cmd_repl)
@@ -1032,6 +1102,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--channels", default="", help="Comma-separated connectors to start, e.g. telegram,webhook")
     add_agent_flags(p_serve)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_web = sub.add_parser(
+        "web",
+        help=_help("web"),
+        epilog="Loopback only unless --allow-remote; the page authenticates with the daemon token.",
+    )
+    p_web.add_argument("--host", default="127.0.0.1")
+    p_web.add_argument("--port", type=int, default=8787)
+    p_web.add_argument("--no-open", action="store_true", help="Do not launch a browser")
+    p_web.add_argument("--allow-remote", action="store_true", help="Permit binding a non-loopback address")
+    add_agent_flags(p_web)
+    p_web.set_defaults(func=cmd_web)
 
     p_channels = sub.add_parser("channels", help=_help("channels"))
     p_channels.add_argument(
@@ -1137,8 +1219,7 @@ def _default_command(argv: list[str]) -> list[str]:
 
     Someone typing `lai` for the first time wants to be told how to start, not
     dropped at a prompt that will fail on the first request because there is no
-    API key. So: never set up → the wizard; set up → the full interface, or the
-    plain REPL if textual is not installed.
+    API key. So: never set up → the wizard; set up → the chat interface.
     """
     try:
         from .setup_wizard import needs_setup  # noqa: PLC0415
@@ -1148,16 +1229,10 @@ def _default_command(argv: list[str]) -> list[str]:
     except Exception:
         pass
 
-    try:
-        import textual  # noqa: F401, PLC0415
-
-        # A full-screen app needs a real terminal; piped output gets the REPL,
-        # which degrades to reading EOF and exiting rather than hanging.
-        if sys.stdout.isatty():
-            return ["tui", *argv]
-    except ImportError:
-        pass
-    return ["repl", *argv]
+    # The chat interface is the front door: it works over a pipe, in a plain
+    # terminal, and with or without prompt_toolkit. `lai tui` is the dashboard
+    # for people who want to watch, and stays an explicit choice.
+    return ["chat", *argv]
 
 
 def main(argv: list[str] | None = None) -> int:

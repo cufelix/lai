@@ -449,7 +449,7 @@ def test_default_command_is_the_interface_once_configured(monkeypatch):
     from lai import cli
 
     monkeypatch.setattr("lai.setup_wizard.needs_setup", lambda *a, **kw: False)
-    assert cli._default_command([])[0] in ("tui", "repl")
+    assert cli._default_command([])[0] == "chat"
 
 
 def test_default_command_survives_a_broken_setup_probe(monkeypatch):
@@ -460,7 +460,7 @@ def test_default_command_survives_a_broken_setup_probe(monkeypatch):
         raise RuntimeError("cannot read config")
 
     monkeypatch.setattr("lai.setup_wizard.needs_setup", explode)
-    assert cli._default_command([])[0] in ("tui", "repl")
+    assert cli._default_command([])[0] == "chat"
 
 
 def test_doctor_json_is_machine_readable(capsys):
