@@ -388,6 +388,33 @@ with `/notes`, `/edit`, `/learn` and `/forget`. Reflection costs one extra
 model call at the end of a run that actually did something; `/learning off`
 (or `[learning] enabled = false`) stops it, and existing notes are still read.
 
+### It can hire a coder
+
+LAI can write files itself, but its tools are aimed at a desktop and it pays
+for every line in agent steps. A coding CLI is a specialist at exactly that —
+and most people running LAI already have one signed in. So the division of
+labour plays to both sides:
+
+```
+▸ code_agent {"task": "build a playable Snake in snake.html…", "workspace": "~/games"}
+  ✓ claude worked for 74s. 1 file(s) changed on disk: ~/games/snake.html
+▸ app_open {"name": "Firefox", "args": ["~/games/snake.html"]}
+▸ computer_key {"key": "ArrowUp"}
+▸ computer_screenshot {}
+  ✓ the snake turned — it works
+```
+
+**The coding agent writes; LAI checks.** Opening the result on a real screen,
+pressing its keys and looking at what happened is the thing no coding agent
+can do for itself. LAI is the architect and the tester; `claude`, `codex`,
+`gemini` or `opencode` is the coder.
+
+What comes back is *evidence, not a claim*: the worker's own summary plus the
+files that actually changed on disk, so "I have created the file for you" with
+an empty directory is reported as exactly that. The worker is confined to one
+named directory, and the tool is classified `destructive`, so in `ask` mode a
+human approves the job before a file is touched.
+
 ### When a backend runs out
 
 Subscriptions hit quotas and hosted endpoints have bad minutes, usually

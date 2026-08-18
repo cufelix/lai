@@ -22,7 +22,7 @@ CORE_MODULES = (computer, ui, window, app, system)
 # circular), and both families depend on optional pieces — tesseract, ffmpeg,
 # a DBus session — that must degrade to "tool absent" rather than "LAI won't
 # start".
-OPTIONAL_MODULES = ("perception", "agentic")
+OPTIONAL_MODULES = ("perception", "agentic", "coding")
 
 
 def _load_optional() -> tuple[list, dict[str, str]]:

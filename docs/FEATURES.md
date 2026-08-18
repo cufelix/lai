@@ -393,6 +393,69 @@ state and write the same `config.toml`.
 
 ---
 
+## Phase 7 — what a real task exposed
+
+Phase 7 came from one experiment: give LAI a genuine build job — *write a
+playable Tetris, open it, verify it on screen* — and fix whatever that breaks.
+It broke four things a test suite on a quiet machine never would.
+
+**A CLI backend's real prompt limit.** The run wrote the file, opened Firefox,
+took a screenshot, and then died three times with
+`{"is_error": true, …, "terminal_reason": "api_error"}`, zero tokens, zero
+duration. Reproduced and measured outside LAI: the `claude` CLI refuses a
+prompt over 100,000 characters and reports the overflow as an API error that
+never reached the API. 99,983 characters succeed; 100,052 fail. Prompts are now
+capped per CLI and shrunk **from the middle** — the head carries the protocol
+and the tool schemas, the tail carries the latest turn and the instruction to
+answer in JSON, and cutting either is how a model ends up replying in prose or
+calling a tool that no longer exists.
+
+**A backend that keeps failing now hands over.** By the time an error reaches
+the fallback chain the provider has already spent its own retries, so whatever
+it blames, it is broken for this run. Ending the task there was the wrong
+answer when four other backends were standing by.
+
+**One desktop, one agent — across processes.** The daemon refused two
+concurrent runs, but that gate lived in one process's memory: `lai do` in one
+terminal, `lai web` in another and a scheduled run all drove the same mouse.
+That does not produce three half-finished tasks; it produces one mangled
+desktop and three agents reporting on a screen somebody else just changed. Now
+an `flock` on `~/.lai/desktop.lock`, held for the length of a run, released by
+the kernel if the holder dies, naming the pid and the task when it refuses.
+Observation-only runs do not queue — reading the screen while another agent
+works is useful, not dangerous.
+
+**Two perception bugs.** `window_arrange` reported the geometry it asked for
+rather than the geometry it got, so an agent computed clicks for a window that
+was never there; it now waits for the motion to stop and names what the window
+manager refused. And the accessibility snapshot was clipped hard to the window
+rectangle — but AT-SPI carries the *toolkit's* idea of where the window is,
+which lags an X11 move by several frames, so moving gnome-calculator deleted
+seven of its keys from the tree until the toolkit caught up.
+
+### Hiring a coder
+
+The obvious question a desktop agent invites: if a coding CLI is already
+installed and signed in, why is LAI writing code one `file_write` at a time?
+
+`code_agent` hands a self-contained programming job to `claude`, `codex`,
+`gemini` or `opencode`, confined to one named directory, and returns the
+worker's account **plus the files that actually changed on disk** — so "I have
+created the file for you" over an empty directory is reported as exactly that.
+It is classified `destructive`, so `ask` mode gates it like `shell_exec`.
+
+The split is the point. The coding agent writes; LAI opens the result on a real
+screen, presses its keys, and says whether it works — which is the half no
+coding agent can do for itself.
+
+### Defects found and fixed in phase 7
+
+23. **`hint=` was written for nobody.** Only `ToolResult.content` reaches the model, so guidance passed as `hint=` or `detail=` lived in `data` where the model never saw it — worse than omitting it, because the code reads as though help was given. Both are folded into the text now.
+24. **`lai doctor` checked half of OCR.** The tesseract binary and the pytesseract binding come from different package managers, so the check reported OK right up until `ocr_read` raised — as it did mid-run. Both halves are checked, and the fix installs whichever is missing.
+25. **An acquired desktop lock could be released by the garbage collector.** `flock` lives on an open file handle; letting the `DesktopLock` go out of scope closed it and freed the desktop while an agent was still driving. Acquired locks are now kept alive explicitly.
+
+---
+
 ### Defects found and fixed in phase 5
 
 18. **A large transcript killed the CLI backends** — the prompt was passed as a single argv entry, and Linux caps one at 128 KiB (`MAX_ARG_STRLEN`). With MCP servers connected the prompt sailed past it and `execve` failed with `E2BIG`, so a perfectly working `claude` reported "could not run claude: Argument list too long" three times and ended the run. Found live, in the browser, on the first real task. Prompts over 96 KB now go down stdin; a CLI that cannot read stdin gets a prompt truncated to fit instead.

@@ -421,3 +421,23 @@ def test_shell_exec_captures_stderr(tmp_path):
         "shell_exec", {"command": "echo oops >&2; exit 1"}, context(cwd=tmp_path)
     )
     assert "oops" in result.content and result.ok is False
+
+
+# -- failure messages ----------------------------------------------------
+
+
+def test_a_failure_hint_reaches_the_model_not_just_the_json():
+    """Only `content` is sent to the model; guidance left in `data` helps nobody."""
+    result = ToolResult.failure("no coding agent is installed", hint="install one of: claude, codex")
+    assert "install one of: claude, codex" in result.content
+    assert result.data["hint"], "and it stays in data for JSON consumers"
+
+
+def test_a_failure_detail_is_folded_in_too():
+    result = ToolResult.failure("claude exited 1", detail="Invalid API key")
+    assert "Invalid API key" in result.content
+
+
+def test_a_hint_already_in_the_message_is_not_repeated():
+    result = ToolResult.failure("run `lai setup` to fix this", hint="run `lai setup` to fix this")
+    assert result.content.count("lai setup") == 1

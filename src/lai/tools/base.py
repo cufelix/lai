@@ -48,7 +48,17 @@ class ToolResult:
         # The parameter is named ``content`` (not ``message``) on purpose:
         # callers splat ``LaiError.to_dict()`` in here, and that carries a
         # "message" key which would otherwise collide with the parameter name.
-        return cls(ok=False, content=content, data={"error": True, **data})
+        #
+        # `hint` and `detail` are folded into the text because only `content`
+        # reaches the model — guidance left in `data` is written for nobody,
+        # which is worse than not writing it, since it reads like help was
+        # given. They stay in `data` as well for JSON consumers.
+        text = content
+        for key in ("detail", "hint"):
+            extra = str(data.get(key) or "").strip()
+            if extra and extra not in text:
+                text = f"{text}\n{key}: {extra}"
+        return cls(ok=False, content=text, data={"error": True, **data})
 
     def truncated(self, limit: int) -> ToolResult:
         if limit <= 0 or len(self.content) <= limit:
