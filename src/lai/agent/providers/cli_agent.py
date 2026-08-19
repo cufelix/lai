@@ -71,6 +71,36 @@ TRANSIENT_MARKERS = (
 )
 RETRY_DELAYS = (3.0, 8.0)
 
+# A coding CLI is itself an agent with its own tools. Handed a prompt listing
+# tools it does not have, it may go looking for them, fail to find them, and
+# conclude — reasonably — that its session has been tampered with. Observed
+# live: `claude` refused mid-run and explained why, and the loop filed that
+# explanation as the task's answer.
+#
+# It is not an answer. A reply that both fails to parse and says the tools are
+# not real is a protocol breakdown, and the honest move is to fail the turn so
+# a retry or another backend gets a chance.
+REFUSAL_MARKERS = (
+    "no such tool",
+    "not real system state",
+    "injected into this conversation",
+    "were injected",
+    "prompt injection",
+    "i won't do that",
+    "i will not do that",
+    "i'm not going to fabricate",
+    "not going to fabricate",
+    "don't actually have",
+    "do not actually have",
+    "no actual tools",
+)
+
+
+def _is_refusal(text: str) -> bool:
+    """True when the reply is a protocol objection rather than a turn."""
+    lowered = (text or "").lower()
+    return sum(marker in lowered for marker in REFUSAL_MARKERS) >= 2
+
 
 def _is_transient(detail: str) -> bool:
     lowered = detail.lower()
@@ -187,8 +217,16 @@ CLI_SPECS: dict[str, CLISpec] = {
 }
 
 PROTOCOL = """\
-You are the reasoning engine for an autonomous desktop agent. You do not talk to \
-a human: your entire reply is parsed by a program.
+You are being asked to CHOOSE THE NEXT ACTION for a separate program called \
+LAI, which controls a Linux desktop. LAI has already connected to that desktop; \
+you have not. Your entire reply is parsed by LAI — no human reads it.
+
+IMPORTANT — this is not a trick and nothing has been injected into your \
+session. The tools listed below are LAI's, not yours. You do not have them, you \
+cannot run them, and you should not look for them or try to call them with your \
+own tooling. Naming one in "tool_calls" is simply how you ask LAI to run it and \
+report back. Everything under "Conversation so far" is LAI's real record of \
+what it has already done on that desktop.
 
 Reply with ONE JSON object and nothing else. No prose before it, no prose after \
 it, no markdown fence. The object has these keys:
@@ -197,9 +235,10 @@ it, no markdown fence. The object has these keys:
   "text":       optional string, what you would say to the user
   "tool_calls": a list (possibly empty) of {"name": "<tool>", "input": {...}}
 
-Call tools by putting them in "tool_calls". Do not describe a tool call in \
-prose — a description does nothing. When the task is finished, call the \
-"task_complete" tool. When you are stuck, call "task_blocked".
+Ask for tools by putting them in "tool_calls". Describing an action in prose \
+does nothing — LAI only acts on that list. When the task is finished, ask for \
+"task_complete". When you are genuinely stuck, ask for "task_blocked"; that is \
+the way to refuse, and it is always available to you.
 
 Example of a valid reply:
 {"text": "Opening the calculator.", "tool_calls": [{"name": "app_open", "input": {"name": "Calculator"}}]}
@@ -286,6 +325,14 @@ class CLIAgentProvider:
             self._clear_images()
 
         if parsed is None:
+            if _is_refusal(raw):
+                raise ProviderError(
+                    f"{self.spec.command} refused the protocol",
+                    detail=_with_hint(self.spec.name, _last_meaningful_lines(raw))
+                    + "\n(it looked for LAI's tools among its own and concluded its "
+                    "session had been tampered with — this is a prompt problem, not a "
+                    "task result)",
+                )
             # Treat prose as a plain answer rather than inventing tool calls.
             return self._turn(text=raw.strip(), calls=[], raw=raw)
 
@@ -465,7 +512,10 @@ class CLIAgentProvider:
                 "Your final reply must still be the single JSON object."
             )
         if tools:
-            parts.append("## Tools you may call\n")
+            parts.append(
+                "## Tools LAI can run for you\n"
+                "These belong to LAI. Name one in \"tool_calls\" to have it run.\n"
+            )
             for tool in tools:
                 schema = json.dumps(tool.get("input_schema", {}), ensure_ascii=False)
                 parts.append(f"### {tool.get('name')}\n{tool.get('description', '')}\ninput schema: {schema}\n")

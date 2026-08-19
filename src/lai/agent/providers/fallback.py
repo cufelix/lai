@@ -39,6 +39,8 @@ SWITCH_PATTERNS = (
     # non-zero is broken for this run, whatever it blames. Handing over to the
     # next backend is strictly better than ending the task here.
     r"api_error", r"exited [1-9]", r"produced no output",
+    # A backend that will not follow the protocol is not going to start.
+    r"refused the protocol",
 )
 _SWITCH = re.compile("|".join(SWITCH_PATTERNS), re.IGNORECASE)
 

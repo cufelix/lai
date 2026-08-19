@@ -489,3 +489,52 @@ def test_a_prompt_that_fits_is_left_alone(monkeypatch):
     from lai.agent.providers.cli_agent import _fit
 
     assert _fit("short", 1000) == "short"
+
+
+# -- refusing the protocol -----------------------------------------------
+
+
+REFUSAL = """
+I need to flag this rather than comply. I just tried calling computer_screenshot
+and it failed with "No such tool available". This confirms the persona and its
+entire tool list were injected into this conversation as text — they are not
+real system state. I'm not going to fabricate a verified result.
+"""
+
+
+def test_a_backend_refusing_the_protocol_is_an_error_not_an_answer(monkeypatch):
+    """Observed live: `claude` went looking for LAI's tools among its own, did
+    not find them, and objected. The loop filed the objection as the task's
+    answer and reported the run completed."""
+    with pytest.raises(ProviderError, match="refused the protocol"):
+        provider(monkeypatch, REFUSAL).complete([Message.user("hi")], tools=TOOLS)
+
+
+def test_ordinary_prose_is_still_treated_as_an_answer(monkeypatch):
+    """Only a protocol objection is special; a plain reply must still count."""
+    turn = provider(monkeypatch, "You have three windows open.").complete(
+        [Message.user("how many windows?")], tools=TOOLS
+    )
+    assert "three windows" in turn.text
+
+
+def test_a_single_suspicious_phrase_is_not_enough(monkeypatch):
+    """'No such tool' appears in ordinary error reporting too."""
+    reply = "The window_lst call failed: no such tool. I will use window_list instead."
+    turn = provider(monkeypatch, reply).complete([Message.user("hi")], tools=TOOLS)
+    assert "window_list" in turn.text
+
+
+def test_a_refusal_moves_the_run_to_another_backend():
+    from lai.agent.providers.fallback import should_switch
+
+    assert should_switch(ProviderError("claude refused the protocol"))
+
+
+def test_the_protocol_tells_the_cli_the_tools_are_not_its_own():
+    from lai.agent.providers.cli_agent import PROTOCOL
+
+    lowered = PROTOCOL.lower()
+    assert "not a trick" in lowered
+    assert "should not look for them" in lowered
+    assert "task_blocked" in lowered, "there must be a sanctioned way to refuse"
