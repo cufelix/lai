@@ -57,7 +57,7 @@ The Chrome extension reads the DOM. The OS equivalent is a *fused* view: pixels 
 | 2.18 | Terminal-app driving | spawn a PTY, drive TUI apps | 1 |
 | 2.19 | dbus method calls | control apps properly (mpris, etc.) | 1 |
 | 2.20 | Global hotkey to summon agent | 1 |
-| 2.21 | Human-handoff / takeover pause | 1 |
+| 2.21 | Human-handoff / takeover pause | shipped — the agent waits while you use the machine | 1 |
 
 ## 3. Agent runtime — "the OpenClaw loop"
 
@@ -246,7 +246,9 @@ the security boundary:
 ### Still open
 
 Browser bridge via CDP · terminal/PTY driving · dbus app control · global hotkey ·
-tray icon · web dashboard · run replay · voice · Wayland backend · sandbox profile.
+tray icon · voice · Wayland backend · sandbox profile.
+
+*(The web dashboard shipped in phase 5, run replay and human handoff in phase 7.)*
 
 ---
 

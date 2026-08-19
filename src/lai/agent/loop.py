@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..errors import Interrupted, LaiError, ProviderError
 from ..safety.audit import AuditLog
-from ..safety.policy import PolicyEngine
+from ..safety.policy import PolicyEngine, Risk
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
 from ..tools.control import BLOCKED_MARKER, DONE_MARKER
 from .prompt import build_system_prompt
@@ -128,6 +128,7 @@ class Agent:
         """Learned notes about this machine; None disables the whole idea."""
         self.desktop_lock = desktop_lock
         """Cross-process claim on the desktop, held for the length of a run."""
+        self._idle_probe = None
         self.session = session or Session()
         self.approver = approver
         self.on_event = on_event
@@ -362,6 +363,60 @@ class Agent:
                                                "model": self.provider.model, "reason": reason})
                 self.audit.write("provider_switch", **{"from": was, "to": now, "reason": reason})
 
+    def _yield_to_human(self, tool_name: str) -> None:
+        """Wait, if the human is using the mouse this tool is about to move.
+
+        Only for tools that drive the input devices: reading the screen while
+        somebody types is harmless, and making observation wait would mean an
+        agent that cannot even look at a desktop in use.
+        """
+        safety = getattr(self.config, "safety", None)
+        if safety is None or not getattr(safety, "yield_to_user", False):
+            return
+        try:
+            spec = self.registry.get(tool_name)
+        except Exception:
+            return  # an unknown tool is the registry's problem to report
+        if spec.risk is not Risk.INPUT:
+            return
+
+        monitor = self._idle_monitor()
+        if monitor is None:
+            return
+
+        from ..safety.yielding import Yielded, wait_for_the_human  # noqa: PLC0415
+
+        try:
+            waited = wait_for_the_human(
+                monitor,
+                settle=safety.user_idle_seconds,
+                limit=safety.max_yield_seconds,
+                on_wait=lambda idle: self._emit(
+                    "yielding", {"tool": tool_name, "idle_seconds": round(idle, 1)}
+                ),
+            )
+        except Yielded as exc:
+            self.audit.write("yielded", tool=tool_name, waited=round(exc.waited, 1))
+            raise
+        if waited > 0:
+            self._emit("resumed", {"waited": round(waited, 1)})
+
+    def _idle_monitor(self):
+        """How long the human has been still, or None if this machine cannot say."""
+        probe = self._idle_probe
+        if probe is not None:
+            return probe
+        try:
+            from ..osl.idle import IdleMonitor  # noqa: PLC0415
+
+            monitor = IdleMonitor()
+            if not monitor.available:
+                return None
+            self._idle_probe = monitor.idle_seconds
+        except Exception:
+            return None
+        return self._idle_probe
+
     def _tool_context(self) -> ToolContext:
         return ToolContext(
             desktop=self.desktop,
@@ -387,6 +442,7 @@ class Agent:
                 raise Interrupted("stopped by user")
 
             self._emit("tool_call", {"name": call.name, "input": call.input, "id": call.id})
+            self._yield_to_human(call.name)
             result: ToolResult = self.registry.call(call.name, call.input, context)
             self._emit(
                 "tool_result",

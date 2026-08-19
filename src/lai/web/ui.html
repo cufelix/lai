@@ -387,6 +387,12 @@
         if (event.images) refreshScreen();
         break;
       }
+      case "yielding":
+        put(el("div", "note switch", "⏸ you are using the machine — waiting for you to finish"));
+        break;
+      case "resumed":
+        put(el("div", "note", `▶ carrying on after ${Math.round(event.waited || 0)}s`));
+        break;
       case "learned": {
         const titles = (event.titles || event.notes || []).slice(0, 3).join("; ");
         const note = put(el("div", "note learned", "✎ learned: " + titles + " — "));

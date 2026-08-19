@@ -461,6 +461,31 @@ recovery time must cost a retry, never an outage.
 
 `/fallback off` or `LAI_FALLBACK=off` turns it off.
 
+### It gets out of your way
+
+A desktop agent shares one mouse with its owner. Two hands on it does not split
+the work — the agent's click lands in whatever window you just switched to, its
+typing goes into your document, and its next screenshot shows a desktop neither
+of you arranged.
+
+So before it touches the mouse or keyboard, LAI checks how long you have been
+still:
+
+```
+▸ computer_click {"x": 812, "y": 344}
+⏸ you are using the machine — waiting for you to finish
+▶ carrying on after 7s
+```
+
+Only for actions that drive the input devices — reading the screen while you
+type is harmless, so observation never waits. Bounded, too: if you simply keep
+working it gives up its turn and says so rather than hanging. And on a machine
+whose X server cannot report idle time, the agent works normally rather than
+refusing to move.
+
+`[safety] yield_to_user = false` turns it off; `user_idle_seconds` sets how
+still you have to be.
+
 ### Permission modes
 
 | Mode | Observe | Click / type | Write files, open apps | Shell, kill |

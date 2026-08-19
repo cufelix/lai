@@ -241,6 +241,14 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
                 f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]"
             )
             spin()
+        elif kind == "yielding":
+            halt()
+            out.write(
+                "[yellow]⏸ you are using the machine — waiting for you to finish[/yellow]"
+            )
+        elif kind == "resumed":
+            out.write(f"[dim]▶ carrying on after {payload.get('waited', 0):.0f}s[/dim]")
+            spin()
         elif kind == "learned":
             halt()
             titles = payload.get("titles") or payload.get("notes") or []

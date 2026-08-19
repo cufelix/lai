@@ -366,6 +366,10 @@ class LaiApp(App):
             )
             self.write(f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]")
             bar.provider = f"{payload['to']}/{payload.get('model', '')}"
+        elif kind == "yielding":
+            self.write("[yellow]⏸ you are using the machine — waiting[/yellow]")
+        elif kind == "resumed":
+            self.write(f"[dim]▶ carrying on after {payload.get('waited', 0):.0f}s[/dim]")
         elif kind == "learned":
             titles = payload.get("titles") or payload.get("notes") or []
             self.write("[magenta]✎ learned:[/magenta] " + "; ".join(str(t) for t in titles[:3]))

@@ -89,6 +89,18 @@ class SafetyConfig:
     max_actions_per_minute: int = 240
     dry_run: bool = False
     redact_secrets: bool = True
+    yield_to_user: bool = True
+    """Stand aside while the human is using the machine.
+
+    A desktop agent shares one mouse with its owner. Two hands on it at once
+    does not split the work — it produces clicks landing in whatever window the
+    other one just switched to. So the agent waits, and the human never has to
+    fight it for control.
+    """
+    user_idle_seconds: float = 4.0
+    """How long the human must be still before the agent moves again."""
+    max_yield_seconds: float = 300.0
+    """Give up waiting after this and say so, rather than hanging forever."""
 
     def __post_init__(self) -> None:
         if self.mode not in PERMISSION_MODES:
@@ -344,6 +356,9 @@ def load_config(
             safety_data.get("confirm_shell_patterns"), _SAFETY_DEFAULTS.confirm_shell_patterns
         ),
         max_actions_per_minute=int(safety_data.get("max_actions_per_minute", 240)),
+        yield_to_user=_bool(env.get("LAI_YIELD"), safety_data.get("yield_to_user", True)),
+        user_idle_seconds=float(safety_data.get("user_idle_seconds", 4.0)),
+        max_yield_seconds=float(safety_data.get("max_yield_seconds", 300.0)),
         dry_run=_bool(env.get("LAI_DRY_RUN"), safety_data.get("dry_run", False)),
         redact_secrets=bool(safety_data.get("redact_secrets", True)),
     )
