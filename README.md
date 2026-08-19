@@ -265,7 +265,8 @@ lai notes                       # what it has learned about this machine
 lai observe                     # print exactly what the agent sees right now
 lai tools                       # list the 53 tools
 lai skills list|install|show    # manage skills
-lai sessions                    # replay past runs
+lai sessions                    # past runs
+lai sessions <id>               # replay one, readably
 lai models                      # every backend this machine can use
 lai schedule                    # recurring tasks (run by the daemon)
 lai channels                    # remote connectors and who may use them

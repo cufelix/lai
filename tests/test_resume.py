@@ -150,3 +150,91 @@ def test_a_declared_task_still_wins(sessions):
 def test_a_transcript_with_nothing_to_say_is_simply_unnamed(sessions):
     Session().bind(sessions)
     assert Session.list_sessions(sessions)[0]["task"] == ""
+
+
+# -- replaying a past run ------------------------------------------------
+
+
+def test_a_past_run_reads_like_the_live_one(tmp_path, monkeypatch, capsys):
+    """A program that drives your desktop must be able to answer "what did you
+    actually do?" in a form a person reads."""
+    from lai.agent.providers.base import Message, TextBlock, ToolCall, ToolResultBlock
+    from lai.cli import main
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+
+    session = Session()
+    session.task = "open the editor"
+    session.bind(sessions)
+    session.append(Message.user("open the editor"))
+    session.append(Message("assistant", [
+        TextBlock("Opening it."), ToolCall("1", "app_open", {"name": "Text Editor"}),
+    ]))
+    session.append(Message("user", [ToolResultBlock("1", "Opened 'Text Editor'.")]))
+
+    assert main(["sessions", session.id]) == 0
+    text = capsys.readouterr().out
+    assert "open the editor" in text
+    assert "app_open" in text and "Text Editor" in text
+    assert "Opened 'Text Editor'." in text
+
+
+def test_a_failed_tool_call_is_visible_in_the_replay(tmp_path, monkeypatch, capsys):
+    from lai.agent.providers.base import Message, ToolCall, ToolResultBlock
+    from lai.cli import main
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+    session = Session()
+    session.bind(sessions)
+    session.append(Message("assistant", [ToolCall("1", "ui_click", {"name": "Save"})]))
+    session.append(Message("user", [ToolResultBlock("1", "element_not_found", is_error=True)]))
+
+    main(["sessions", session.id])
+    assert "element_not_found" in capsys.readouterr().out
+
+
+def test_the_replay_does_not_invent_numbers_it_does_not_have(tmp_path, monkeypatch, capsys):
+    """A reloaded transcript carries no usage, and its 'elapsed' counts to now."""
+    from lai.agent.providers.base import Message
+    from lai.cli import main
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+    session = Session()
+    session.bind(sessions)
+    session.append(Message.user("a task"))
+
+    main(["sessions", session.id])
+    text = capsys.readouterr().out
+    assert "0 in / 0 out" not in text
+    assert "tokens" not in text
+
+
+def test_a_session_can_be_replayed_by_prefix(tmp_path, monkeypatch, capsys):
+    from lai.agent.providers.base import Message
+    from lai.cli import main
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+    session = Session()
+    session.task = "something memorable"
+    session.bind(sessions)
+    session.append(Message.user("something memorable"))
+
+    assert main(["sessions", session.id[:6]]) == 0
+    assert "something memorable" in capsys.readouterr().out
+
+
+def test_replaying_an_unknown_session_says_where_to_look(tmp_path, monkeypatch, capsys):
+    from lai.cli import main
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    (tmp_path / "sessions").mkdir(parents=True)
+    assert main(["sessions", "nosuchthing"]) == 1
+    assert "lai sessions" in capsys.readouterr().err

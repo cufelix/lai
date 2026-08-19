@@ -81,6 +81,11 @@ class Message:
     def tool_calls(self) -> list[ToolCall]:
         return [b for b in self.content if isinstance(b, ToolCall)]
 
+    @property
+    def tool_results(self) -> list[ToolResultBlock]:
+        """What came back from the tools — the half a replay needs to be honest."""
+        return [b for b in self.content if isinstance(b, ToolResultBlock)]
+
     def to_dict(self) -> dict:
         return {"role": self.role, "content": [_block_to_dict(b) for b in self.content]}
 

@@ -21,6 +21,8 @@ from .osl.lock import DesktopBusy
 from .runtime import build_runtime
 
 BANNER = "LAI — native desktop agent"
+PROMPT_GLYPH = "\u203a"
+"""What a person typed, in a replayed transcript — the same mark the chat uses."""
 
 # The command list, once. `--help` renders from here and build_parser pulls its
 # help strings from here, so a new command can never exist in one and not the
@@ -646,23 +648,71 @@ def cmd_notes(args) -> int:
     return 0
 
 
+def _replay(out: Out, session, entry: dict, *, full: bool = False) -> None:
+    """Render a past run the way it looked when it happened.
+
+    A program that drives your desktop has to be able to answer "what did you
+    actually do?" in a form a person reads, not as a JSON dump. Same shapes as
+    the live view, so the transcript and the run look like the same thing.
+    """
+    import time  # noqa: PLC0415
+
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["modified"]))
+    limit = 4000 if full else 300
+
+    out.write(f"[bold]{entry.get('task') or session.task or '(no task recorded)'}[/bold]")
+    out.write(f"[dim]{session.id} · {when} · {len(session.messages)} messages[/dim]")
+    out.rule()
+
+    for message in session.messages:
+        text = message.text.strip()
+        if text and message.role == "user" and not message.tool_results:
+            out.write(f"\n[bold cyan]{PROMPT_GLYPH}[/bold cyan] {text[:limit]}")
+        elif text:
+            out.write(f"{text[:limit]}")
+        for call in message.tool_calls:
+            arguments = json.dumps(call.input, ensure_ascii=False)
+            out.write(f"[cyan]▸ {call.name}[/cyan] [dim]{arguments[:limit]}[/dim]")
+        for result in message.tool_results:
+            mark = "[red]✗[/red]" if result.is_error else "[green]✓[/green]"
+            body = " ".join(str(result.content).split())
+            images = " [magenta]+image[/magenta]" if result.images else ""
+            out.write(f"  {mark} [dim]{body[:limit]}[/dim]{images}")
+
+    out.rule()
+    # A loaded transcript carries no usage and no duration — `elapsed` on a
+    # reloaded session counts from its start to *now*. Printing "0 in / 0 out
+    # tokens · 70592s" is worse than printing nothing.
+    usage = session.usage
+    if usage.input_tokens or usage.output_tokens:
+        out.write(f"[dim]{usage.input_tokens} in / {usage.output_tokens} out tokens[/dim]")
+    if not full:
+        out.write("[dim]`--full` shows untruncated output[/dim]")
+
+
 def cmd_sessions(args) -> int:
     out = Out(quiet=args.json)
     config = load_config()
     from .agent.session import Session  # noqa: PLC0415
 
     if args.id:
-        session = Session.load(Path(config.sessions_dir) / f"{args.id}.jsonl")
+        matches = [
+            entry for entry in Session.list_sessions(config.sessions_dir, limit=500)
+            if entry["id"].startswith(args.id)
+        ]
+        if not matches:
+            out.error(f"no session starting with {args.id!r} — `lai sessions` lists them")
+            return 1
+        if len(matches) > 1 and not any(entry["id"] == args.id for entry in matches):
+            out.error(f"{args.id!r} matches {len(matches)} sessions: "
+                      + ", ".join(entry["id"] for entry in matches[:5]))
+            return 1
+        chosen = next((e for e in matches if e["id"] == args.id), matches[0])
+        session = Session.load(Path(chosen["path"]))
         if args.json:
             print(json.dumps(session.summary(), indent=2))
-        else:
-            out.write(json.dumps(session.summary(), indent=2))
-            for message in session.messages:
-                text = message.text.strip()
-                if text:
-                    out.write(f"\n[bold]{message.role}[/bold]: {text[:600]}")
-                for call in message.tool_calls:
-                    out.write(f"  [cyan]▸ {call.name}[/cyan] [dim]{json.dumps(call.input)[:120]}[/dim]")
+            return 0
+        _replay(out, session, chosen, full=args.full)
         return 0
 
     sessions = Session.list_sessions(config.sessions_dir, limit=args.limit)
@@ -1198,6 +1248,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sessions = sub.add_parser("sessions", help=_help("sessions"))
     p_sessions.add_argument("id", nargs="?", default="")
     p_sessions.add_argument("--limit", type=int, default=20)
+    p_sessions.add_argument("--full", action="store_true", help="Do not truncate tool output")
     p_sessions.add_argument("--json", action="store_true")
     p_sessions.set_defaults(func=cmd_sessions)
 
