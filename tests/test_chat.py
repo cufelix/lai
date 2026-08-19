@@ -36,6 +36,7 @@ class FakeRuntime:
                                      "search": lambda self, q: []})()
         self.policy = type("P", (), {"config": self.config.safety})()
         self.desktop = None
+        self.extra: dict = {}
 
 
 @pytest.fixture(autouse=True)
@@ -350,3 +351,95 @@ def test_edit_without_an_editor_says_where_the_files_are(learning_runtime, monke
     monkeypatch.setattr(notes_module, "editor_command", list)
     text = run(Context(runtime=learning_runtime), "/edit drawing")
     assert "EDITOR" in text and "~/.lai/notes" in text
+
+
+# -- the rest of the command surface -------------------------------------
+
+
+def backend(name="zai", model="glm-5", detail="via key", resting=""):
+    from lai.models import READY, Backend
+
+    return Backend(name=name, label=name, kind="api", status=READY,
+                   detail=detail, model=model, resting=resting)
+
+
+def test_model_with_a_name_switches_directly(runtime, monkeypatch):
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: FakeProvider(name=config.name, model=config.model or "m"),
+    )
+    assert "ollama/big" in run(Context(runtime=runtime), "/model ollama big")
+
+
+def test_the_model_menu_marks_a_resting_backend(runtime, monkeypatch):
+    """Offering an exhausted key as a choice without saying so wastes a turn."""
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        lambda rt=None, **kw: [backend(), backend(name="openai", resting="out of quota, retry in 40 min")],
+    )
+    seen: dict = {}
+    ctx = Context(runtime=runtime, ask=lambda question, options: seen.setdefault("options", options) and -1)
+    run(ctx, "/model")
+    assert any("out of quota" in option for option in seen["options"])
+
+
+def test_the_model_list_without_a_menu_still_names_them(runtime, monkeypatch):
+    monkeypatch.setattr("lai.chat.backends.catalogue", lambda rt=None, **kw: [backend()])
+    assert "zai" in run(Context(runtime=runtime), "/model")
+
+
+def test_no_ready_backend_points_at_setup(runtime, monkeypatch):
+    monkeypatch.setattr("lai.chat.backends.catalogue", lambda rt=None, **kw: [])
+    assert "lai setup" in run(Context(runtime=runtime), "/model")
+
+
+def test_tools_lists_and_filters(runtime):
+    from lai.safety.policy import Risk
+
+    spec = type("S", (), {"name": "window_list", "risk": Risk.READ, "description": "List windows."})()
+    other = type("S", (), {"name": "shell_exec", "risk": Risk.DESTRUCTIVE, "description": "Run a command."})()
+    runtime.registry = type("R", (), {"__len__": lambda self: 2,
+                                      "specs": lambda self: [spec, other]})()
+    assert "window_list" in run(Context(runtime=runtime), "/tools")
+    filtered = run(Context(runtime=runtime), "/tools shell")
+    assert "shell_exec" in filtered and "window_list" not in filtered
+
+
+def test_skills_lists_and_searches(runtime):
+    skill = type("S", (), {"name": "invoicing", "description": "File invoices."})()
+    runtime.skills = type("S", (), {"__len__": lambda self: 1, "list": lambda self: [skill],
+                                    "search": lambda self, q: [skill] if q in skill.name else []})()
+    assert "invoicing" in run(Context(runtime=runtime), "/skills")
+    assert "invoicing" in run(Context(runtime=runtime), "/skills invoic")
+    assert "0 skill" in run(Context(runtime=runtime), "/skills nothing")
+
+
+def test_observe_reports_what_it_sees(runtime):
+    runtime.desktop = type("D", (), {
+        "observe": lambda self, **kw: type("O", (), {"summary": lambda self: "FOCUSED: 'Calculator'"})()
+    })()
+    assert "Calculator" in run(Context(runtime=runtime), "/observe")
+
+
+def test_doctor_reports_and_says_whether_it_is_ready(runtime, monkeypatch):
+    from lai.checks import FAIL, OK, Check, Report
+
+    monkeypatch.setattr(
+        "lai.checks.run_checks",
+        lambda rt=None, **kw: Report([Check("a", "display server", OK, "x11"),
+                                      Check("b", "input", FAIL, "xdotool missing")]),
+    )
+    text = run(Context(runtime=runtime), "/doctor")
+    assert "display server" in text and "xdotool missing" in text
+    assert "not ready" in text
+
+
+def test_session_reports_the_current_conversation(runtime):
+    from lai.agent.session import Session
+
+    runtime.extra = {"chat_session": Session()}
+    assert "messages" in run(Context(runtime=runtime), "/session")
+
+
+def test_web_points_at_the_command_that_opens_it(runtime):
+    assert "lai web" in run(Context(runtime=runtime), "/web")
