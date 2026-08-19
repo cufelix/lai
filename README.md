@@ -438,6 +438,26 @@ two models mid-task). Only failures another backend could plausibly survive
 move the run on — quota, auth, an outage; a malformed request is raised, since
 it would fail identically everywhere.
 
+**And it remembers.** A quota lasts hours, so rediscovering it every run — send,
+wait, 429, fail over — is pure waste. Failures are written down with a recovery
+time, and vendors usually state one:
+
+```
+$ lai models
+Ready now
+  cli:codex      cli   codex
+  ollama         local qwen3-vl:2b
+  zai            api   glm-5.2
+                 ⏳ out of quota, retry in 59 min
+  cli:claude     cli   claude
+                 ⏳ out of quota, retry in 59 min
+```
+
+That "59 min" is z.ai's own stated reset time, parsed rather than guessed. A
+backend still cooling is skipped as a standby, and `auto` will not start on one.
+An *explicitly configured* backend is always tried anyway — being wrong about a
+recovery time must cost a retry, never an outage.
+
 `/fallback off` or `LAI_FALLBACK=off` turns it off.
 
 ### Permission modes

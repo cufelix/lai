@@ -492,9 +492,16 @@
       const row = el("div", "row");
       const label = el("div", "grow");
       label.appendChild(el("b", null, backend.name));
-      label.appendChild(el("span", "sub", `${backend.model || backend.kind} — ${backend.detail || ""}`));
+      label.appendChild(el("span", "sub",
+        backend.resting
+          ? `${backend.model || backend.kind} — ⏳ ${backend.resting}`
+          : `${backend.model || backend.kind} — ${backend.detail || ""}`));
       row.appendChild(label);
-      row.appendChild(el("span", "pill " + (backend.status === "ready" ? "ready" : backend.status === "auth" ? "auth" : ""), backend.status));
+      row.appendChild(el(
+        "span",
+        "pill " + (backend.resting || backend.status === "auth" ? "auth" : backend.status === "ready" ? "ready" : ""),
+        backend.resting ? "resting" : backend.status,
+      ));
       if (backend.status === "ready") {
         const use = el("button", "iconbtn", data.active === backend.name ? "in use" : "use");
         use.disabled = data.active === backend.name;
