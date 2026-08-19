@@ -97,6 +97,11 @@ class FallbackProvider:
     def chain(self) -> list[str]:
         return [c.name for c in self.candidates]
 
+    @property
+    def context_chars(self) -> int:
+        """Whatever the backend currently answering can take."""
+        return int(getattr(self.active, "context_chars", 0) or 0)
+
     def complete(self, messages: list[Message], **kwargs) -> TurnResult:
         last: ProviderError | None = None
         while True:

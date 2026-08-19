@@ -248,6 +248,11 @@ class CLIAgentProvider:
                 detail=spec.describe or f"install {spec.command} and try again",
             )
 
+    @property
+    def context_chars(self) -> int:
+        """What this CLI will accept in one prompt — the loop compacts against it."""
+        return self.spec.prompt_limit
+
     # -- Provider protocol ------------------------------------------------
 
     def complete(

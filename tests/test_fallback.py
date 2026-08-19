@@ -371,3 +371,16 @@ def test_a_cli_that_keeps_exiting_non_zero_hands_over():
 
 def test_a_cli_producing_no_output_hands_over():
     assert should_switch(ProviderError("claude produced no output"))
+
+
+# -- context budget ------------------------------------------------------
+
+
+def test_the_chain_reports_the_active_backends_context():
+    """Compaction has to size itself against whoever is actually answering."""
+    small = FakeProvider("cli:claude")
+    small.context_chars = 96_000
+    provider = chain(FakeProvider("zai"), small)
+    assert provider.context_chars == 0, "an API provider declares no character cap"
+    provider.index, provider.active = 1, small
+    assert provider.context_chars == 96_000

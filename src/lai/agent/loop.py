@@ -36,6 +36,14 @@ EventCallback = Callable[[str, dict], None]
 
 COMPACT_AT_FRACTION = 0.75
 COMPACT_MIN_TOKENS = 40_000
+"""Never compact a transcript smaller than this — when the budget is a *setting*.
+
+A backend with a hard cap of its own overrides it: flooring the threshold above
+what the backend can physically accept means compaction never fires and the
+provider silently cuts the conversation instead.
+"""
+
+MIN_CONTEXT_TOKENS = 4_000
 
 
 @dataclass(slots=True)
@@ -428,8 +436,7 @@ class Agent:
 
     def _maybe_compact(self) -> None:
         """Summarise old turns when the transcript gets heavy."""
-        limit = self.config.limits.max_tokens
-        threshold = max(COMPACT_MIN_TOKENS, int(limit * COMPACT_AT_FRACTION))
+        threshold = self._compact_threshold()
         estimated = self.session.estimate_tokens()
         if estimated < threshold:
             self.session.prune_images()
@@ -440,6 +447,31 @@ class Agent:
         dropped = self.session.compact(summary)
         self.audit.write("compacted", dropped=dropped, estimated_tokens=estimated)
         self._emit("compacted", {"dropped": dropped})
+
+    def _context_budget(self) -> int:
+        """How much transcript this backend can actually take, in tokens.
+
+        A configured token limit describes a hosted API. A CLI backend is
+        bounded by what its binary accepts — far less — and without this the
+        loop never compacts, so every turn is instead *cut* to fit by the
+        provider. Cutting drops the middle of the conversation; compacting
+        summarises it. The difference is whether the agent still knows what it
+        already tried.
+        """
+        chars = getattr(self.provider, "context_chars", 0)
+        if chars:
+            # ~4 characters per token is the usual rough conversion, and the
+            # prompt also carries the tool schemas, so leave a third spare.
+            return max(int(chars / 4 * 0.66), MIN_CONTEXT_TOKENS)
+        return self.config.limits.max_tokens
+
+    def _compact_threshold(self) -> int:
+        """The transcript size at which summarising beats carrying on."""
+        limit = self._context_budget()
+        fraction = int(limit * COMPACT_AT_FRACTION)
+        if getattr(self.provider, "context_chars", 0):
+            return fraction  # a hard cap governs; no floor may sit above it
+        return max(COMPACT_MIN_TOKENS, fraction)
 
     def _summarise_history(self) -> str:
         """Ask the model for a handoff summary; fall back to a mechanical one."""

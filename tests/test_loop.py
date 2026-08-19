@@ -364,3 +364,53 @@ def test_interrupt_flag_is_cleared_between_runs():
     agent.interrupt()
     assert agent.run("first").status == "interrupted"
     assert agent.run("second").status == "completed"
+
+
+# -- compaction sizes itself to the backend ------------------------------
+
+
+def _agent_with(provider, max_tokens=600_000):
+    """A bare Agent with just enough wiring to ask about its context budget."""
+    from dataclasses import replace
+
+    from lai.agent.loop import Agent
+    from lai.config import load_config
+
+    agent = Agent.__new__(Agent)
+    config = load_config()
+    agent.config = config.with_overrides(limits=replace(config.limits, max_tokens=max_tokens))
+    agent.provider = provider
+    return agent
+
+
+def test_a_hosted_backend_keeps_the_configured_budget():
+    provider = type("P", (), {"name": "zai", "model": "glm"})()
+    assert _agent_with(provider)._context_budget() == 600_000
+
+
+def test_a_cli_backend_shrinks_the_budget_to_what_it_can_swallow():
+    """Without this the loop never compacts, so the provider cuts the middle
+    out of the conversation every turn instead — and the agent forgets what it
+    already tried."""
+    provider = type("P", (), {"name": "cli:claude", "model": "claude", "context_chars": 96_000})()
+    agent = _agent_with(provider)
+    budget = agent._context_budget()
+    assert 10_000 < budget < 20_000, "roughly what 96k characters of prompt holds"
+    assert agent._compact_threshold() < budget, (
+        "the threshold must sit below what the backend can take, or it never fires"
+    )
+
+
+def test_the_budget_never_collapses_to_nothing():
+    from lai.agent.loop import MIN_CONTEXT_TOKENS
+
+    provider = type("P", (), {"name": "cli:tiny", "model": "t", "context_chars": 100})()
+    assert _agent_with(provider)._context_budget() >= MIN_CONTEXT_TOKENS
+
+
+def test_a_hosted_backend_keeps_its_do_not_bother_floor():
+    """Summarising a two-message conversation is pointless work."""
+    from lai.agent.loop import COMPACT_MIN_TOKENS
+
+    provider = type("P", (), {"name": "zai", "model": "glm"})()
+    assert _agent_with(provider, max_tokens=1_000)._compact_threshold() == COMPACT_MIN_TOKENS
