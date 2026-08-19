@@ -77,6 +77,9 @@ class FallbackProvider:
 
     index: int = 0
     active: Provider | None = None
+    _last: tuple = ("", "")
+    """The last backend that was actually answering, kept for honest reporting
+    once the chain is exhausted and ``active`` is None."""
     failures: dict = field(default_factory=dict)
     """Backend name → why it stepped aside. Surfaced by the UIs."""
 
@@ -84,16 +87,26 @@ class FallbackProvider:
         if not self.candidates:
             raise ProviderError("no model backend available", detail="run `lai setup` to add one")
         self.active = self.candidates[0].build()
+        self._remember()
 
     # -- Provider protocol -------------------------------------------------
 
     @property
     def name(self) -> str:
-        return getattr(self.active, "name", self.candidates[self.index].name)
+        if self.active is not None:
+            return self.active.name
+        return self._last[0] or self.candidates[self.index].name
 
     @property
     def model(self) -> str:
-        return getattr(self.active, "model", "")
+        return self.active.model if self.active is not None else self._last[1]
+
+    def _remember(self) -> None:
+        if self.active is not None:
+            self._remember_pair(self.active.name, self.active.model)
+
+    def _remember_pair(self, name: str, model: str) -> None:
+        self._last = (name, model)
 
     @property
     def chain(self) -> list[str]:
@@ -105,6 +118,12 @@ class FallbackProvider:
         return int(getattr(self.active, "context_chars", 0) or 0)
 
     def complete(self, messages: list[Message], **kwargs) -> TurnResult:
+        if self.active is None:
+            # Every backend has stepped aside. Saying so — with each one's
+            # reason — is the difference between a diagnosis and an
+            # AttributeError on the next turn.
+            raise self.exhausted()
+
         last: ProviderError | None = None
         while True:
             try:
@@ -117,6 +136,18 @@ class FallbackProvider:
                 last = ProviderError(f"{self.name}: {exc}")
                 if not should_switch(exc) or not self._advance(str(exc)):
                     raise last from exc
+
+    def exhausted(self) -> ProviderError:
+        """The error to raise when nothing is left to try."""
+        if self.failures:
+            detail = "; ".join(f"{name}: {why}" for name, why in self.failures.items())
+        else:
+            detail = "no backend was usable"
+        return ProviderError(
+            f"all {len(self.candidates)} model backend(s) failed",
+            detail=detail + " — `lai models` shows what this machine can use, "
+            "`lai setup` adds another",
+        )
 
     def close(self) -> None:
         closer = getattr(self.active, "close", None)
@@ -139,6 +170,7 @@ class FallbackProvider:
             candidate = self.candidates[self.index]
             try:
                 self.active = candidate.build()
+                self._remember()
             except Exception as exc:
                 # An unusable fallback is not an error worth surfacing on its
                 # own — it is simply not a fallback. Record it and keep going.

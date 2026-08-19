@@ -461,11 +461,40 @@ worker's account: "No files changed on disk — whatever it says, nothing was
 written." LAI then diagnosed the cause itself and retried with explicit
 instructions, which is the behaviour the design was aiming for.
 
+### When the worker is an agent too
+
+The sharpest lesson of phase 7 came from the coding CLI refusing to play along
+— twice, in two different ways, both times correctly.
+
+**As a worker**, given a spec-shaped task, it replied with a design and *"please
+confirm"* and wrote nothing. Right for a chat, useless for a job nobody is
+watching.
+
+**As a model**, it went looking for `computer_screenshot` among its own tools,
+did not find it, and concluded its session had been tampered with — then said
+so at length instead of answering. That is exactly the instinct a coding agent
+should have. The fault was LAI's prompt, which said "you are the reasoning
+engine" and listed tools under *"Tools you may call"*, inviting an agent that
+genuinely has tools to go and call them.
+
+Both are the same underlying mistake: treating a coding agent as a function
+when it is a participant. It has its own judgement and will exercise it. So
+the contract is now stated in full, in both directions — what this is, who owns
+the tools, that nothing has been injected, that `task_blocked` is the
+sanctioned way to refuse, and that nobody is available to answer a question.
+
+And a refusal is no longer allowed to become a result: a reply that both fails
+to parse and insists the tools are not real is a provider error, retried or
+handed to the next backend, rather than being filed as the task's answer — which
+is what happened the first time, complete with a `✓ completed`.
+
 ### Defects found and fixed in phase 7
 
 23. **`hint=` was written for nobody.** Only `ToolResult.content` reaches the model, so guidance passed as `hint=` or `detail=` lived in `data` where the model never saw it — worse than omitting it, because the code reads as though help was given. Both are folded into the text now.
 24. **`lai doctor` checked half of OCR.** The tesseract binary and the pytesseract binding come from different package managers, so the check reported OK right up until `ocr_read` raised — as it did mid-run. Both halves are checked, and the fix installs whichever is missing.
-25. **An acquired desktop lock could be released by the garbage collector.** `flock` lives on an open file handle; letting the `DesktopLock` go out of scope closed it and freed the desktop while an agent was still driving. Acquired locks are now kept alive explicitly.
+25. **A refusal was reported as success.** The run that ended with `claude` objecting to the protocol was filed as `✓ completed`, with the objection as its summary. A protocol breakdown now fails the turn.
+26. **Compaction never fired on a CLI backend.** The threshold was sized from `limits.max_tokens`, which describes a hosted API; a CLI capped at 96k characters never reached it, so the provider quietly cut the middle out of the conversation every turn instead of summarising it. The agent forgot what it had already tried, on exactly the long runs where that matters most.
+27. **An acquired desktop lock could be released by the garbage collector.** `flock` lives on an open file handle; letting the `DesktopLock` go out of scope closed it and freed the desktop while an agent was still driving. Acquired locks are now kept alive explicitly.
 
 ---
 

@@ -384,3 +384,42 @@ def test_the_chain_reports_the_active_backends_context():
     assert provider.context_chars == 0, "an API provider declares no character cap"
     provider.index, provider.active = 1, small
     assert provider.context_chars == 96_000
+
+
+def test_an_exhausted_chain_explains_itself_on_the_next_turn():
+    """Observed live: after five backends stepped aside, the sixth turn raised
+    'NoneType object has no attribute complete' — a crash where a diagnosis
+    belonged."""
+    provider = chain(
+        FakeProvider("zai", fails_with=ProviderError("HTTP 429 Usage limit reached")),
+        FakeProvider("ollama", fails_with=ProviderError("network error: timed out")),
+    )
+    with pytest.raises(ProviderError, match="timed out"):
+        provider.complete([Message.user("one")])
+
+    with pytest.raises(ProviderError) as info:
+        provider.complete([Message.user("two")])
+    message = str(info.value)
+    assert "all 2 model backend(s) failed" in message
+    assert "zai" in message and "Usage limit" in message
+    assert "ollama" in message and "timed out" in message
+    assert "lai models" in message
+
+
+def test_the_exhausted_error_survives_having_no_recorded_reasons():
+    provider = chain(FakeProvider("only", fails_with=ProviderError("429 rate limit")))
+    provider.active, provider.failures = None, {}
+    assert "no backend was usable" in str(provider.exhausted())
+
+
+def test_an_exhausted_chain_still_names_who_was_answering_last():
+    """The switch event is emitted after the turn, by which point the chain may
+    already be spent — reporting 'ollama/' with no model helps nobody."""
+    provider = chain(
+        FakeProvider("zai", fails_with=ProviderError("429 rate limit")),
+        FakeProvider("ollama", model="qwen3-vl:2b", fails_with=ProviderError("timed out")),
+    )
+    with pytest.raises(ProviderError):
+        provider.complete([Message.user("hi")])
+    assert provider.name == "ollama"
+    assert provider.model == "qwen3-vl:2b"
