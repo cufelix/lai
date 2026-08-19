@@ -1001,7 +1001,7 @@ def cmd_models(args) -> int:
             out.write(f"  [dim]{detail}[/dim]")
         return 0
 
-    found = backends.discover(probe_local=not args.no_probe)
+    found = backends.discover(probe_local=not args.no_probe, home=load_config().home)
     if args.json:
         print(json.dumps([b.to_dict() for b in found], indent=2))
         return 0
@@ -1023,10 +1023,15 @@ def cmd_models(args) -> int:
         out.write(f"\n[bold {style}]{title}[/bold {style}]")
         for backend in rows:
             vision = "" if backend.vision else " [dim](no vision)[/dim]"
+            colour = "yellow" if backend.resting else "cyan"
             out.write(
-                f"  [cyan]{backend.name:<14}[/cyan] [dim]{kinds.get(backend.kind, ''):<5}[/dim] "
+                f"  [{colour}]{backend.name:<14}[/{colour}] [dim]{kinds.get(backend.kind, ''):<5}[/dim] "
                 f"{backend.model:<28}{vision}"
             )
+            if backend.resting:
+                # Credentials existing and a backend answering are different
+                # facts, and only the second one is worth acting on.
+                out.write(f"                 [yellow]⏳ {backend.resting}[/yellow]")
             if backend.detail:
                 out.write(f"                 [dim]{backend.detail}[/dim]")
             if backend.hint and status != backends.READY:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -36,20 +36,28 @@ class Backend:
     signup: str = ""
     hint: str = ""
     vision: bool = True
+    resting: str = ""
+    """Why this backend refused recently, and roughly when it recovers.
+
+    Credentials existing and a backend answering are different facts. A key
+    that is out of quota until noon is not "ready now", and saying so is the
+    difference between a listing and a guess.
+    """
 
     @property
     def usable(self) -> bool:
-        return self.status == READY
+        return self.status == READY and not self.resting
 
     def to_dict(self) -> dict:
         return {
+            "resting": self.resting,
             "name": self.name, "label": self.label, "kind": self.kind,
             "status": self.status, "detail": self.detail, "model": self.model,
             "vision": self.vision, "hint": self.hint, "signup": self.signup,
         }
 
 
-def discover(*, probe_local: bool = True, timeout: float = 0.6) -> list[Backend]:
+def discover(*, probe_local: bool = True, timeout: float = 0.6, home=None) -> list[Backend]:
     """Everything LAI could use, best first.
 
     Local endpoints are probed by opening a connection rather than assumed from
@@ -62,6 +70,7 @@ def discover(*, probe_local: bool = True, timeout: float = 0.6) -> list[Backend]
     env = os.environ
     backends: list[Backend] = []
     seen: set[str] = set()
+    resting = _resting(home)
 
     # 1. Whatever the runtime would actually pick, in its own order.
     try:
@@ -147,9 +156,30 @@ def discover(*, probe_local: bool = True, timeout: float = 0.6) -> list[Backend]
             vision=vendor.vision,
         ))
 
+    if resting:
+        backends = [
+            replace(backend, resting=resting[backend.name])
+            if backend.name in resting else backend
+            for backend in backends
+        ]
+
     order = {READY: 0, NEEDS_AUTH: 1, KNOWN: 2}
-    backends.sort(key=lambda b: (order.get(b.status, 3), b.kind != KIND_API, b.name))
+    # A backend that is refusing today sorts below one that is not, whatever
+    # its credentials say — the point of the list is what to reach for now.
+    backends.sort(key=lambda b: (order.get(b.status, 3), bool(b.resting), b.kind != KIND_API, b.name))
     return backends
+
+
+def _resting(home) -> dict[str, str]:
+    """Backends known to be refusing, and for how long."""
+    if home is None:
+        return {}
+    try:
+        from .agent.providers.health import cooling  # noqa: PLC0415
+
+        return {name: entry.describe() for name, entry in cooling(home).items()}
+    except Exception:
+        return {}
 
 
 def _cli_sees_images(name: str) -> bool:

@@ -64,7 +64,20 @@ def cmd_status(ctx: Context, arg: str) -> str:
         lines.append("[dim]standby: " + " → ".join(standbys) + "[/dim]")
     for name, why in info["failures"].items():
         lines.append(f"[yellow]! {name} stepped aside:[/yellow] [dim]{why}[/dim]")
+    for name, entry in _resting(runtime).items():
+        if name not in info["failures"]:
+            lines.append(f"[yellow]⏳ {name}:[/yellow] [dim]{entry}[/dim]")
     return "\n".join(lines)
+
+
+def _resting(runtime) -> dict:
+    """Backends known to be refusing, from earlier runs as well as this one."""
+    try:
+        from ..agent.providers.health import cooling  # noqa: PLC0415
+
+        return {name: entry.describe() for name, entry in cooling(runtime.config.home).items()}
+    except Exception:
+        return {}
 
 
 def cmd_model(ctx: Context, arg: str) -> str:
@@ -74,13 +87,16 @@ def cmd_model(ctx: Context, arg: str) -> str:
         target, _, model = arg.strip().partition(" ")
         return "[green]now using[/green] " + backends.use(runtime, target, model=model.strip())
 
-    found = [b for b in backends.catalogue() if b.status == "ready"]
+    found = [b for b in backends.catalogue(runtime) if b.status == "ready"]
     if not found:
         return "[yellow]No backend is ready. Run `lai setup`, or paste a key with /key.[/yellow]"
     if ctx.ask is None:
         return "\n".join(f"  {b.name}  [dim]{b.model}[/dim]" for b in found)
 
-    labels = [f"{b.name}  ({b.model or b.kind})  — {b.detail}" for b in found]
+    labels = [
+        f"{b.name}  ({b.model or b.kind})  — " + (f"⏳ {b.resting}" if b.resting else b.detail)
+        for b in found
+    ]
     index = ctx.ask("Which backend should answer?", labels)
     if index < 0:
         return "[dim]unchanged[/dim]"

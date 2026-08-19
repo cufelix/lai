@@ -47,7 +47,7 @@ def test_runtime_registers_control_and_skill_tools():
 def test_runtime_records_a_provider_failure_instead_of_raising(monkeypatch):
     monkeypatch.setattr(
         "lai.runtime.build_provider",
-        lambda config: (_ for _ in ()).throw(ProviderError("no key anywhere")),
+        lambda config, **kwargs: (_ for _ in ()).throw(ProviderError("no key anywhere")),
     )
     runtime = build_runtime(with_mcp=False)
     try:
@@ -60,7 +60,7 @@ def test_runtime_records_a_provider_failure_instead_of_raising(monkeypatch):
 def test_agent_without_a_provider_raises_a_helpful_error(monkeypatch):
     monkeypatch.setattr(
         "lai.runtime.build_provider",
-        lambda config: (_ for _ in ()).throw(ProviderError("nothing configured")),
+        lambda config, **kwargs: (_ for _ in ()).throw(ProviderError("nothing configured")),
     )
     runtime = build_runtime(with_mcp=False)
     try:

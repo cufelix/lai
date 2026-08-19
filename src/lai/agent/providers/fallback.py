@@ -77,6 +77,8 @@ class FallbackProvider:
 
     index: int = 0
     active: Provider | None = None
+    home: object = None
+    """Where to record which backends are refusing, and for how long."""
     _last: tuple = ("", "")
     """The last backend that was actually answering, kept for honest reporting
     once the chain is exhausted and ``active`` is None."""
@@ -108,6 +110,28 @@ class FallbackProvider:
     def _remember_pair(self, name: str, model: str) -> None:
         self._last = (name, model)
 
+    def _clear(self, name: str) -> None:
+        """A backend that just answered is healthy, whatever it did before."""
+        if self.home is None:
+            return
+        try:
+            from .health import note_success  # noqa: PLC0415
+
+            note_success(self.home, name)
+        except Exception:
+            pass
+
+    def _record(self, name: str, reason: str) -> None:
+        """Write down why a backend stepped aside, so tomorrow's run knows."""
+        if self.home is None:
+            return
+        try:
+            from .health import note_failure  # noqa: PLC0415
+
+            note_failure(self.home, name, reason)
+        except Exception:
+            pass
+
     @property
     def chain(self) -> list[str]:
         return [c.name for c in self.candidates]
@@ -127,7 +151,7 @@ class FallbackProvider:
         last: ProviderError | None = None
         while True:
             try:
-                return self.active.complete(messages, **kwargs)  # type: ignore[union-attr]
+                turn = self.active.complete(messages, **kwargs)  # type: ignore[union-attr]
             except ProviderError as exc:
                 last = exc
                 if not should_switch(exc) or not self._advance(str(exc)):
@@ -136,6 +160,9 @@ class FallbackProvider:
                 last = ProviderError(f"{self.name}: {exc}")
                 if not should_switch(exc) or not self._advance(str(exc)):
                     raise last from exc
+            else:
+                self._clear(self.name)
+                return turn
 
     def exhausted(self) -> ProviderError:
         """The error to raise when nothing is left to try."""
@@ -163,6 +190,7 @@ class FallbackProvider:
         """Move to the next backend that can be built. False when none is left."""
         failed = self.name
         self.failures[failed] = _short(reason)
+        self._record(failed, reason)
         self.close()
 
         while self.index + 1 < len(self.candidates):

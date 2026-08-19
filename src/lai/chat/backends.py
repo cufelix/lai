@@ -14,11 +14,17 @@ from ..config import Config
 from ..errors import ProviderError
 
 
-def catalogue(*, probe: bool = True) -> list:
-    """Every backend this machine could use, ready ones first."""
+def catalogue(runtime=None, *, probe: bool = True) -> list:
+    """Every backend this machine could use, ready ones first.
+
+    Given a runtime, backends known to be refusing right now are marked as
+    such — a key that is out of quota until noon is not something to offer as
+    a choice without saying so.
+    """
     from ..models import discover  # noqa: PLC0415
 
-    return discover(probe_local=probe)
+    home = runtime.config.home if runtime is not None else None
+    return discover(probe_local=probe, home=home)
 
 
 def describe(runtime) -> dict:
@@ -51,7 +57,7 @@ def use(runtime, name: str, *, model: str = "", persist: bool = True) -> str:
         raise ProviderError("no backend named")
 
     config = replace(runtime.config.provider, name=name, model=model, api_key="", base_url="")
-    provider = build_provider(config)
+    provider = build_provider(config, home=runtime.config.home)
 
     previous = runtime.provider
     runtime.config = runtime.config.with_overrides(provider=config)

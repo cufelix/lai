@@ -203,23 +203,23 @@ def _ollama_model() -> str:
     return models[0]
 
 
-def build_provider(config: ProviderConfig, *, on_switch=None) -> Provider:
+def build_provider(config: ProviderConfig, *, on_switch=None, home=None) -> Provider:
     """Instantiate the configured provider, with its fallback chain behind it.
 
     ``on_switch(from_name, to_name, reason)`` is called if a run has to move to
     a standby backend, so the interface can say so rather than silently
     answering as somebody else.
     """
-    chain = build_chain(config)
+    chain = build_chain(config, home=home)
     if len(chain) == 1:
         return chain[0].build()
 
     from .fallback import FallbackProvider  # noqa: PLC0415
 
-    return FallbackProvider(chain, on_switch=on_switch)
+    return FallbackProvider(chain, on_switch=on_switch, home=home)
 
 
-def build_chain(config: ProviderConfig) -> list:
+def build_chain(config: ProviderConfig, *, home=None) -> list:
     """The ordered backends this configuration may use, best first.
 
     Every entry is lazy: building a provider can probe a socket or shell out to
@@ -231,6 +231,7 @@ def build_chain(config: ProviderConfig) -> list:
 
     credentials = discover_credentials()
     name = (config.name or "auto").lower()
+    resting = _resting(home)
 
     if name == "auto":
         if not credentials:
@@ -241,7 +242,12 @@ def build_chain(config: ProviderConfig) -> list:
                     "OPENROUTER_API_KEY, or run a local ollama. See `lai doctor`."
                 ),
             )
-        name = credentials[0].provider
+        # "auto" means "whichever works", so a backend known to be refusing is
+        # not the one to start on. If every one of them is resting, start at
+        # the top anyway — a stale cooldown must not leave the machine with no
+        # agent at all.
+        awake = [c for c in credentials if c.provider not in resting]
+        name = (awake or credentials)[0].provider
 
     primary = next((c for c in credentials if c.provider == name), None)
     chain = [Candidate(name, lambda: _instantiate(name, config, primary))]
@@ -258,6 +264,8 @@ def build_chain(config: ProviderConfig) -> list:
         if not standby or standby in seen or standby == "auto":
             continue
         seen.add(standby)
+        if standby in resting:
+            continue
         credential = next((c for c in credentials if c.provider == standby), None)
         # A standby never inherits the primary's key, model or URL — a z.ai key
         # aimed at Anthropic is not a fallback, it is a confusing 401.
@@ -338,6 +346,24 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
         f"unknown provider {name!r}",
         detail="run `lai models` to see everything this machine can use",
     )
+
+
+def _resting(home) -> dict:
+    """Backends known to be refusing right now, and until when.
+
+    A backend that told us when its quota resets should not be asked again
+    before then. An explicitly configured backend is exempt: the user asked for
+    it, and being wrong about a recovery time must cost a retry, never an
+    outage.
+    """
+    if home is None:
+        return {}
+    try:
+        from .health import cooling  # noqa: PLC0415
+
+        return cooling(home)
+    except Exception:
+        return {}
 
 
 def _by_capability(credentials: list[Credential]) -> list[str]:

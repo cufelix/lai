@@ -359,7 +359,7 @@ def test_do_without_a_provider_exits_two(monkeypatch, capsys):
 
     monkeypatch.setattr(
         "lai.runtime.build_provider",
-        lambda config: (_ for _ in ()).throw(ProviderError("no backend here")),
+        lambda config, **kwargs: (_ for _ in ()).throw(ProviderError("no backend here")),
     )
     assert main(["do", "anything", "--no-mcp"]) == 2
     assert "no backend here" in capsys.readouterr().err

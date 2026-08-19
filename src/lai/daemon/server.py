@@ -290,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/models":
                 from ..chat import backends as backend_tools  # noqa: PLC0415
 
-                found = backend_tools.catalogue()
+                found = backend_tools.catalogue(runtime)
                 self._send(200, {
                     "active": runtime.provider.name if runtime.provider else "",
                     "backends": [b.to_dict() for b in found],

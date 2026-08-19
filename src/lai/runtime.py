@@ -153,7 +153,7 @@ def build_runtime(
     provider_error = ""
     if with_provider:
         try:
-            provider = build_provider(config.provider)
+            provider = build_provider(config.provider, home=config.home)
         except LaiError as exc:
             provider_error = str(exc)
 
