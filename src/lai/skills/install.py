@@ -116,11 +116,17 @@ def _install_from_archive(url: str, target_dir: Path, *, name: str | None, overw
 def _extract_zip(payload: bytes, destination: Path) -> None:
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            # Only the members that passed the checks are extracted. Filtering
+            # in a loop and then calling extractall() on the whole archive —
+            # which is what this used to do — made the size limit advisory:
+            # the member was skipped in the loop and written anyway.
+            members = []
             for member in archive.infolist():
                 if member.file_size > MAX_MEMBER_BYTES:
                     continue
                 _safe_extract_path(destination, member.filename)
-            archive.extractall(destination)  # noqa: S202 - members validated above
+                members.append(member)
+            archive.extractall(destination, members=members)  # noqa: S202 - validated above
     except zipfile.BadZipFile as exc:
         raise SkillError("downloaded file is not a valid zip archive") from exc
 

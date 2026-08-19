@@ -43,6 +43,18 @@ MAX_LISTED_FILES = 40
 # bounded and says so rather than quietly reporting a partial answer.
 MAX_SCANNED_FILES = 20_000
 
+# A coding agent is handed write permission inside its workspace, so the
+# workspace is the whole of the containment. `yolo` mode does not ask, and a
+# model that names "/" or the bare home directory would be turning a build job
+# into a rewrite of the machine. These are refused outright — not because a
+# denylist is a security boundary, but because no legitimate build job has its
+# workspace here, so refusing costs nothing and catches the accident.
+FORBIDDEN_WORKSPACES = {
+    "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/root",
+    "/run", "/sbin", "/srv", "/sys", "/usr", "/var", "/opt", "/home",
+    "/tmp",  # noqa: S108 - listed to refuse it as a workspace, not to use it
+}
+
 # How to run each CLI as a *worker* that may edit files in one directory —
 # which is a different invocation from using it as a model (see
 # agent/providers/cli_agent.py, where the same binaries answer questions).
@@ -211,7 +223,15 @@ def _prepare_workspace(raw) -> Path:
         raise ValueError("workspace is required — name the directory it may write in")
     workspace = Path(str(raw)).expanduser()
     if not workspace.is_absolute():
-        workspace = (Path.cwd() / workspace).resolve()
+        workspace = Path.cwd() / workspace
+    workspace = Path(os.path.normpath(workspace))
+
+    resolved = str(workspace.resolve() if workspace.exists() else workspace).rstrip("/") or "/"
+    if resolved in FORBIDDEN_WORKSPACES or resolved == str(Path.home()):
+        raise ValueError(
+            f"{resolved} is not a workspace — name the project directory it should build in, "
+            "such as ~/projects/thing or a new folder"
+        )
     if workspace.exists() and not workspace.is_dir():
         raise ValueError(f"{workspace} is a file, not a directory")
     workspace.mkdir(parents=True, exist_ok=True)

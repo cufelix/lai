@@ -376,3 +376,49 @@ def test_skill_load_records_what_was_loaded(tmp_path):
     ctx = ToolContext(config=Config(home=tmp_path), skills=SkillRegistry([tmp_path]), session=session)
     registry.call("skill_load", {"name": "noted"}, ctx)
     assert session.metadata["loaded_skills"] == ["noted"]
+
+
+# -- archive extraction --------------------------------------------------
+
+
+def test_a_traversing_member_never_escapes_the_destination(tmp_path):
+    """Belt and braces: `_safe_extract_path` refuses these, and Python's own
+    zipfile sanitises member names as well. Worth pinning, because the size
+    check `continue`s past our validation and leaves only zipfile's."""
+    import io
+    import zipfile
+
+    from lai.skills.install import MAX_MEMBER_BYTES, _extract_zip
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("skill/SKILL.md", "# fine")
+        # Oversized *and* traversing: the size check used to skip validation.
+        archive.writestr("../escaped.txt", "x" * (MAX_MEMBER_BYTES + 10))
+
+    destination = tmp_path / "skills"
+    destination.mkdir()
+    _extract_zip(payload.getvalue(), destination)
+
+    assert (destination / "skill" / "SKILL.md").is_file()
+    assert not (tmp_path / "escaped.txt").exists(), "it escaped the destination"
+
+
+def test_an_oversized_member_is_simply_left_out(tmp_path):
+    """The size check used to be advisory: members were filtered in a loop and
+    then `extractall()` wrote the entire archive regardless."""
+    import io
+    import zipfile
+
+    from lai.skills.install import MAX_MEMBER_BYTES, _extract_zip
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("skill/SKILL.md", "# fine")
+        archive.writestr("skill/huge.bin", "x" * (MAX_MEMBER_BYTES + 10))
+
+    destination = tmp_path / "skills"
+    destination.mkdir()
+    _extract_zip(payload.getvalue(), destination)
+    assert (destination / "skill" / "SKILL.md").is_file()
+    assert not (destination / "skill" / "huge.bin").exists()
