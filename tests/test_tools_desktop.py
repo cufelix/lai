@@ -43,6 +43,11 @@ def app(desktop, registry):
     if not result.ok or not window:
         pytest.skip(f"could not launch {TEST_APP}: {result.content[:200]}")
     desktop.wait_settle(timeout=4)
+    # A window existing and its accessibility tree being published are
+    # different moments. Waiting for a known control is what an agent should
+    # do after a launch, and skipping it here is what made these tests flaky
+    # under load rather than wrong.
+    registry.call("ui_wait_for", {"name": "7", "timeout": 10}, ctx)
     try:
         yield {"ctx": ctx, "window": window, "pid": window["pid"]}
     finally:
