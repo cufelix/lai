@@ -363,3 +363,41 @@ def test_install_falls_back_to_instructions_without_a_package_manager(monkeypatc
     assert check.fix is not None
     assert not check.fix.automatic
     assert "xdotool" in check.fix.manual
+
+
+# -- coding agents -------------------------------------------------------
+
+
+def test_installed_coding_agents_are_named(monkeypatch):
+    from lai.checks import check_coders
+
+    monkeypatch.setattr("lai.tools.coding.available_coders", lambda: ["claude", "codex"])
+    check = check_coders()
+    assert check.status == OK
+    assert "claude" in check.detail and "code_agent" in check.detail
+
+
+def test_no_coding_agent_is_a_note_not_a_problem(monkeypatch):
+    """LAI writes files perfectly well itself; a coder is an upgrade."""
+    from lai.checks import check_coders
+
+    monkeypatch.setattr("lai.tools.coding.available_coders", list)
+    check = check_coders()
+    assert check.status == WARN and not check.required and not check.blocking
+    assert check.fix is not None and "opencode" in check.fix.manual
+
+
+def test_a_broken_probe_is_a_warning_not_a_crash(monkeypatch):
+    from lai.checks import check_coders
+
+    def explode():
+        raise RuntimeError("import blew up")
+
+    monkeypatch.setattr("lai.tools.coding.available_coders", explode)
+    assert check_coders().status == WARN
+
+
+def test_doctor_reports_the_coding_agents():
+    from lai.checks import run_checks
+
+    assert run_checks().get("coders") is not None

@@ -414,6 +414,35 @@ def _ocr_fix(*, binary: bool, binding: bool) -> Fix:
     )
 
 
+def check_coders() -> Check:
+    """Which coding agents are here for `code_agent` to delegate to.
+
+    Optional by design: LAI writes files perfectly well itself. Having one is
+    the difference between building software one `file_write` at a time and
+    handing the job to a specialist, so it is worth naming either way.
+    """
+    try:
+        from .tools.coding import PREFERENCE, available_coders  # noqa: PLC0415
+
+        found = available_coders()
+    except Exception as exc:
+        return Check("coders", "coding agents", WARN, f"unavailable: {exc}", required=False)
+
+    if found:
+        return Check("coders", "coding agents", OK, ", ".join(found) + " — `code_agent` can delegate",
+                     required=False)
+    return Check(
+        "coders", "coding agents", WARN,
+        "none installed — LAI will write code itself, one file at a time",
+        fix=Fix(
+            description="install a coding agent",
+            manual="any of: " + ", ".join(PREFERENCE)
+            + ". They also work as model backends (`lai models`), so one install covers both.",
+        ),
+        required=False,
+    )
+
+
 def check_recorder() -> Check:
     if shutil.which("ffmpeg"):
         return Check("recorder", "screen recording (ffmpeg)", OK, "available", required=False)
@@ -453,7 +482,7 @@ def run_checks(runtime=None, config=None, *, include_optional: bool = True) -> R
         lambda: check_provider(runtime),
     ]
     if include_optional:
-        probes.extend([check_ocr, check_recorder])
+        probes.extend([check_ocr, check_recorder, check_coders])
     if config is not None:
         probes.append(lambda: check_config(config))
 
