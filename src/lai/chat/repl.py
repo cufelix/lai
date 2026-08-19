@@ -19,7 +19,7 @@ from ..agent.session import Session
 from ..errors import Interrupted, LaiError
 from ..osl.lock import DesktopBusy
 from . import backends
-from .commands import COMMANDS, NEW, QUIT, Context
+from .commands import COMMANDS, NEW, QUIT, RESUME, Context
 from .commands import run as run_command
 
 BANNER = "LAI"
@@ -90,7 +90,7 @@ def status_line(runtime) -> str:
     return text
 
 
-def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False) -> int:
+def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False, resume: str = "") -> int:
     """The read → run → render loop. Returns a process exit code."""
     from ..cli import Out, _interactive_approver, _make_reporter  # noqa: PLC0415
 
@@ -101,13 +101,21 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False) -> int
         return _no_provider(out, runtime)
 
     reader = Reader(Path(runtime.config.home) / "history")
-    session = Session()
+
+    session, resumed = None, ""
+    if resume:
+        from .session_pick import resume as pick  # noqa: PLC0415
+
+        session, resumed = pick(runtime.config.sessions_dir, "" if resume is True else str(resume))
+    session = session or Session()
     runtime.extra["chat_session"] = session
     approver = _interactive_approver(out)
     reporter = _make_reporter(out, verbose=verbose)
     ctx = Context(runtime=runtime, ask=_asker(out, reader))
 
     _welcome(out, runtime)
+    if resume:
+        out.write(f"[green]↺ {resumed}[/green]" if session.messages else f"[yellow]{resumed}[/yellow]")
 
     pending = task.strip()
     while True:
@@ -135,6 +143,17 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False) -> int
                 session = Session()
                 runtime.extra["chat_session"] = session
                 out.write("[dim]new session — the agent has forgotten what came before[/dim]")
+                continue
+            if answer.startswith(RESUME):
+                from .session_pick import resume as pick  # noqa: PLC0415
+
+                found, why = pick(runtime.config.sessions_dir, answer[len(RESUME):])
+                if found is None:
+                    out.write(f"[yellow]{why}[/yellow]")
+                else:
+                    session = found
+                    runtime.extra["chat_session"] = session
+                    out.write(f"[green]↺ {why}[/green]")
                 continue
             if answer:
                 out.write(answer)

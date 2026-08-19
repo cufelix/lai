@@ -255,6 +255,7 @@ script if you already have one. If a key is already in your environment,
 
 ```bash
 lai                             # setup if new, otherwise the chat interface
+lai --continue                  # pick up the last conversation
 lai do "<task>"                 # one autonomous run
 lai web                         # the same agent, in your browser
 lai tui                         # full-screen dashboard
@@ -298,6 +299,7 @@ Slash commands cover everything you would otherwise have to quit for:
 | `/notes` `/edit` `/learn` `/forget` | what it has learned here — read, correct, teach, delete |
 | `/settings` | everything you can change, and what it is set to |
 | `/new` | forget this conversation and start clean |
+| `/sessions` `/resume` | past conversations, and picking one up again |
 
 Everything you change is written to `~/.lai/config.toml`, so the next start
 remembers it. History and tab-completion come from prompt_toolkit when it is

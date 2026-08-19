@@ -199,13 +199,7 @@ class Session:
         files = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         out = []
         for file in files[:limit]:
-            task = ""
-            try:
-                with file.open(encoding="utf-8") as handle:
-                    first = json.loads(handle.readline() or "{}")
-                    task = first.get("task", "")
-            except Exception:
-                pass
+            task = _describe_transcript(file)
             out.append({
                 "id": file.stem,
                 "task": task,
@@ -245,3 +239,41 @@ def _message_from_dict(payload: dict) -> Message:
         elif kind == "image":
             blocks.append(TextBlock("[screenshot from an earlier session]"))
     return Message(payload.get("role", "user"), blocks)
+
+
+# How far into a transcript to look for something to call it. The task is
+# written at the top when it is known, but a session is bound before the first
+# instruction arrives, so it often is not — and a list of sessions with no
+# descriptions makes resuming by id guesswork.
+_DESCRIBE_LINES = 30
+
+
+def _describe_transcript(path: Path) -> str:
+    """A one-line name for a session: its declared task, else what was first asked."""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for index, line in enumerate(handle):
+                if index >= _DESCRIBE_LINES:
+                    break
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("kind") == "session_start" and payload.get("task"):
+                    return str(payload["task"])
+                if payload.get("kind") == "message" and payload.get("role") == "user":
+                    text = _first_text(payload)
+                    if text:
+                        return text
+    except OSError:
+        pass
+    return ""
+
+
+def _first_text(payload: dict) -> str:
+    for block in payload.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = str(block.get("text") or "").strip()
+            if text:
+                return text
+    return ""

@@ -308,10 +308,22 @@ def cmd_chat(args) -> int:
     try:
         from .chat import run_chat  # noqa: PLC0415
 
-        return run_chat(runtime, out=Out(), task=getattr(args, "task", "") or "",
-                        verbose=getattr(args, "verbose", False))
+        return run_chat(
+            runtime,
+            out=Out(),
+            task=getattr(args, "task", "") or "",
+            verbose=getattr(args, "verbose", False),
+            resume=_resume_choice(args),
+        )
     finally:
         runtime.close()
+
+
+def _resume_choice(args) -> str:
+    """`--continue` means the most recent; `--resume <id>` means that one."""
+    if getattr(args, "resume", None):
+        return str(args.resume)
+    return "last" if getattr(args, "continue_", False) else ""
 
 
 def cmd_repl(args) -> int:
@@ -1093,6 +1105,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Slash commands inside: /model /fallback /mode /doctor /help.",
     )
     p_chat.add_argument("task", nargs="?", default="", help="Optional first task")
+    p_chat.add_argument("--continue", "-c", dest="continue_", action="store_true",
+                        help="Pick up the most recent conversation")
+    p_chat.add_argument("--resume", metavar="ID", help="Pick up a specific conversation (`lai sessions`)")
     add_agent_flags(p_chat)
     p_chat.set_defaults(func=cmd_chat)
 

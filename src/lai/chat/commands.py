@@ -231,6 +231,30 @@ def cmd_forget(ctx: Context, arg: str) -> str:
     )
 
 
+RESUME = "\x00resume:"
+
+
+def cmd_resume(ctx: Context, arg: str) -> str:
+    """Pick up an earlier conversation, by id or simply the last one."""
+    return RESUME + arg.strip()
+
+
+def cmd_sessions(ctx: Context, arg: str) -> str:
+    from ..agent.session import Session  # noqa: PLC0415
+
+    listing = Session.list_sessions(ctx.runtime.config.sessions_dir, limit=15)
+    if not listing:
+        return "[dim]no past sessions yet[/dim]"
+    import time as _time  # noqa: PLC0415
+
+    lines = []
+    for entry in listing:
+        when = _time.strftime("%d %b %H:%M", _time.localtime(entry["modified"]))
+        lines.append(f"  [cyan]{entry['id']}[/cyan]  [dim]{when}  {(entry['task'] or '')[:60]}[/dim]")
+    lines.append("[dim]/resume <id> to continue one, /resume for the most recent[/dim]")
+    return "\n".join(lines)
+
+
 def cmd_settings(ctx: Context, arg: str) -> str:
     """Everything you can change, and what it is set to."""
     runtime = ctx.runtime
@@ -292,6 +316,8 @@ COMMANDS: dict[str, tuple] = {
     "fallback": (cmd_fallback, "standby order when a backend refuses", False),
     "mode": (cmd_mode, "permission mode: readonly · ask · auto · yolo", False),
     "new": (cmd_new, "start a fresh session", False),
+    "resume": (cmd_resume, "continue an earlier conversation", False),
+    "sessions": (cmd_sessions, "past conversations", False),
     "settings": (cmd_settings, "everything you can change, and what it is set to", False),
     "notes": (cmd_notes, "what it has learned about this machine", False),
     "learn": (cmd_learn, "teach it: /learn <topic>: <what you know>", False),
