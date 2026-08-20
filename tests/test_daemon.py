@@ -426,7 +426,12 @@ def test_stop_during_construction_abandons_the_run(daemon):
         worker.join(timeout=15)
 
 
-def test_state_replace_is_immutable_on_config():
-    config = load_config()
+def test_state_replace_is_immutable_on_config(tmp_path, monkeypatch):
+    """Isolated deliberately: reading the developer's own config made this test
+    depend on whatever mode they last used."""
+    monkeypatch.setenv("LAI_HOME", str(tmp_path))
+    monkeypatch.delenv("LAI_MODE", raising=False)
+    config = load_config().with_overrides(safety=replace(load_config().safety, mode="ask"))
     changed = config.with_overrides(safety=replace(config.safety, mode="yolo"))
-    assert config.safety.mode != "yolo" and changed.safety.mode == "yolo"
+    assert config.safety.mode == "ask", "the original must not be mutated"
+    assert changed.safety.mode == "yolo"

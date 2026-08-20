@@ -335,6 +335,7 @@ class Agent:
             cwd=self.cwd,
             extra=self.system_extra,
             knowledge=self._knowledge_block(task or self.session.task or ""),
+            task=task or self.session.task or "",
         )
 
     def _model_turn(self):

@@ -209,3 +209,104 @@ def test_skills_block_caps_the_listing():
     many = FakeSkills([FakeSkill(f"s{i}", f"desc {i}") for i in range(200)])
     block = skills_block(many)
     assert block.count("**s") <= 80
+
+
+# -- skills cost tokens on every turn ------------------------------------
+
+
+SKILLS = [
+    FakeSkill("python-testing", "Testing strategies using pytest, fixtures and coverage."),
+    FakeSkill("python-patterns", "Pythonic idioms, PEP 8 and type hints."),
+    FakeSkill("ffmpeg-analyse-video", "Analyse video content by extracting frames."),
+    FakeSkill("travel-planner", "Plan trips, itineraries and budgets."),
+    FakeSkill("dmux-workflows", "Multi-agent orchestration across tmux panes."),
+    FakeSkill("clickhouse-io", "ClickHouse query optimisation and analytics."),
+    FakeSkill("gsap", "GSAP animation reference for compositions."),
+    FakeSkill("postgres-patterns", "PostgreSQL schema design and indexing."),
+]
+
+
+def test_a_matching_skill_is_described_in_full():
+    from lai.agent.prompt import skills_block
+
+    block = skills_block(FakeSkills(SKILLS), "write python tests for this module")
+    assert "python-testing" in block
+    assert "pytest" in block, "the matching skill's description is what makes it useful"
+
+
+def test_the_rest_are_still_listed_by_name():
+    """Nothing may become invisible just because it did not match."""
+    from lai.agent.prompt import skills_block
+
+    block = skills_block(FakeSkills(SKILLS), "write python tests")
+    assert "travel-planner" in block
+    assert "Plan trips" not in block, "but without spending tokens on its description"
+
+
+def test_an_irrelevant_task_describes_nothing():
+    """Describing six arbitrary skills is exactly the waste this avoids."""
+    from lai.agent.prompt import skills_block
+
+    block = skills_block(FakeSkills(SKILLS), "open the calculator and add two numbers")
+    assert "pytest" not in block and "Plan trips" not in block
+    assert "python-testing" in block and "travel-planner" in block, "all still named"
+
+
+def test_a_common_word_does_not_count_as_a_match():
+    """'open the calculator' used to match every skill containing 'workflow'."""
+    from lai.agent.prompt import _rank_skills
+
+    corpus = [FakeSkill(f"skill-{i}", "a workflow for working with work") for i in range(10)]
+    _ranked, matched = _rank_skills(corpus, "work out the workflow")
+    assert matched == 0, "a term matching the whole corpus distinguishes nothing"
+
+
+def test_whole_words_only():
+    from lai.agent.prompt import _rank_skills
+
+    corpus = [FakeSkill("dmux-workflows", "orchestration"), FakeSkill("kitten-videos", "cute animals")]
+    ranked, matched = _rank_skills(corpus, "work with kitten footage")
+    assert matched == 1
+    assert ranked[0].name == "kitten-videos", "'work' must not match 'workflows'"
+
+
+def test_a_plural_still_matches():
+    from lai.agent.prompt import _rank_skills
+
+    corpus = [FakeSkill("video-tools", "editing"), FakeSkill("other", "nothing")]
+    ranked, matched = _rank_skills(corpus, "make some videos")
+    assert matched == 1 and ranked[0].name == "video-tools"
+
+
+def test_no_task_keeps_the_original_order():
+    from lai.agent.prompt import _rank_skills
+
+    ranked, matched = _rank_skills(SKILLS, "")
+    assert matched == 0
+    assert [s.name for s in ranked] == [s.name for s in SKILLS]
+
+
+def test_the_skills_block_shrinks_when_none_of_them_apply():
+    """The measurable point: describing 40 skills costs the same on every turn
+    of every run, whether or not any of them has anything to do with the task."""
+    from lai.agent.prompt import build_system_prompt, skills_block
+
+    many = [FakeSkill(f"skill-{i}", "A fairly wordy description. " * 12) for i in range(40)]
+    focused = skills_block(FakeSkills(many), "open the calculator")
+    everything = skills_block(FakeSkills(many))
+    assert len(focused) < len(everything) / 4
+
+    # And the whole prompt gets meaningfully cheaper, not just this section.
+    whole = build_system_prompt(skills=FakeSkills(many), task="open the calculator")
+    before = build_system_prompt(skills=FakeSkills(many))
+    assert len(whole) < len(before) * 0.7
+
+
+def test_a_broken_skill_registry_costs_nothing():
+    from lai.agent.prompt import skills_block
+
+    class Broken:
+        def list(self):
+            raise RuntimeError("skills directory vanished")
+
+    assert skills_block(Broken(), "anything") == ""

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import time
 from pathlib import Path
 
@@ -162,8 +163,26 @@ def safety_block(safety) -> str:
     return "\n".join(lines)
 
 
-def skills_block(skills) -> str:
-    """Progressive disclosure: advertise names and descriptions only."""
+SKILL_DETAIL_LIMIT = 6
+"""How many skills get a full description in the prompt."""
+
+COMMON_TERM_FRACTION = 0.25
+"""A task word appearing in more than this share of skills is noise, not a match."""
+
+MIN_COMMON_HITS = 2
+"""...but it takes at least this many hits, or a small corpus dismisses real matches."""
+
+
+def skills_block(skills, task: str = "") -> str:
+    """Advertise the skills worth knowing about, in full — and the rest by name.
+
+    Describing all of them costs the same tokens on every turn of every run,
+    and most are irrelevant to any given task: a desktop agent asked to open
+    the calculator does not need to be told, in a paragraph, what the video
+    compositing skill does. So the ones that match the task are described, the
+    remainder are listed by name so nothing is invisible, and `skill_load`
+    fetches the detail when the model actually wants it.
+    """
     if skills is None:
         return ""
     try:
@@ -172,15 +191,78 @@ def skills_block(skills) -> str:
         return ""
     if not available:
         return ""
+
+    ranked, matched = _rank_skills(available, task)
+    # Nothing matched means nothing here is relevant, and describing six
+    # arbitrary skills in that case is the waste this function exists to stop.
+    detail_count = min(matched, SKILL_DETAIL_LIMIT) if task else SKILL_DETAIL_LIMIT
+    detailed, remaining = ranked[:detail_count], ranked[detail_count:]
+
     lines = [
         "# Skills",
-        "Reusable procedures available to you. Load one with `skill_load(name)` when its "
-        "description matches what you are about to do — the full instructions are only "
-        "shown once loaded.",
+        "Reusable procedures available to you. Load one with `skill_load(name)` when it "
+        "matches what you are about to do — the full instructions are only shown once "
+        "loaded. `skill_list(query)` searches all of them.",
         "",
     ]
-    lines.extend(f"- **{skill.name}** — {skill.description}" for skill in available[:80])
+    lines.extend(f"- **{skill.name}** — {skill.description}" for skill in detailed)
+    if remaining:
+        names = ", ".join(skill.name for skill in remaining[:120])
+        lines.append("")
+        prefix = "Also available" if detailed else "Available"
+        lines.append(f"{prefix} (use `skill_load` for details): {names}")
     return "\n".join(lines)
+
+
+def _stem(term: str) -> str:
+    """Crude singular of a task word — enough for matching, not for grammar."""
+    if term.endswith("es") and len(term) > 5:
+        return term[:-2]
+    if term.endswith("s") and not term.endswith("ss") and len(term) > 4:
+        return term[:-1]
+    return term
+
+
+def _rank_skills(available: list, task: str) -> tuple[list, int]:
+    """(skills best-first, how many actually matched the task).
+
+    A keyword score rather than anything cleverer: the corpus is a few dozen
+    short descriptions, and a match that can be explained beats one that cannot.
+    """
+    terms = {t for t in re.split(r"\W+", (task or "").lower()) if len(t) > 3}
+    if not terms:
+        return list(available), 0
+
+    haystacks = [
+        (skill.name.lower(), (skill.description or "").lower()) for skill in available
+    ]
+    # Whole words, not substrings: "open the calculator" was matching every
+    # skill whose description contains "workflow", on the strength of "work".
+    # Plurals are stemmed on both sides, so a task saying "videos" still finds
+    # a skill about "video".
+    patterns = {term: re.compile(rf"\b{re.escape(_stem(term))}(?:e?s)?\b") for term in terms}
+    # A word that appears in half the corpus tells us nothing about which half
+    # to pick: "open the calculator" matched a dozen skills on "open" alone.
+    # Rarity is the signal, and computing it beats maintaining a stopword list.
+    # The floor matters: in a corpus of two, "a quarter of them" is half a
+    # skill, so a single genuine match would be dismissed as noise.
+    noise_threshold = max(MIN_COMMON_HITS, len(available) * COMMON_TERM_FRACTION)
+    common = {
+        term for term, pattern in patterns.items()
+        if sum(bool(pattern.search(f"{name} {body}")) for name, body in haystacks) > noise_threshold
+    }
+    terms -= common
+    if not terms:
+        return list(available), 0
+
+    scored = []
+    for index, ((name, description), skill) in enumerate(zip(haystacks, available, strict=True)):
+        score = sum(6 for term in terms if patterns[term].search(name))
+        score += sum(1 for term in terms if patterns[term].search(description))
+        # index keeps the original order stable among equals
+        scored.append((-score, index, skill))
+    scored.sort()
+    return [skill for _, _, skill in scored], sum(1 for score, _, _ in scored if score < 0)
 
 
 def build_system_prompt(
@@ -191,6 +273,7 @@ def build_system_prompt(
     cwd: Path | None = None,
     extra: str = "",
     knowledge: str = "",
+    task: str = "",
 ) -> str:
     sections = [
         IDENTITY,
@@ -199,7 +282,7 @@ def build_system_prompt(
     ]
     if safety is not None:
         sections.append(safety_block(safety))
-    skills_text = skills_block(skills)
+    skills_text = skills_block(skills, task)
     if skills_text:
         sections.append(skills_text)
     if knowledge:
