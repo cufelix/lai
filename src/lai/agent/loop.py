@@ -32,6 +32,7 @@ from .providers.base import (
 )
 from .repetition import Repetition
 from .session import Session
+from .toolgate import ToolGate
 
 EventCallback = Callable[[str, dict], None]
 
@@ -146,7 +147,11 @@ class Agent:
         self.stop_requested = threading.Event()
         self.tool_extra: dict = {}
         """Long-lived services (memory, scheduler, this agent) handed to tools."""
+        self.gate = ToolGate(registry)
+        """Decides which tool schemas this task is worth paying for."""
+        self.tool_extra["tool_gate"] = self.gate
         self._system_prompt: str = ""
+        self._tool_schemas: list[dict] = []
 
     # -- public ----------------------------------------------------------
 
@@ -187,6 +192,7 @@ class Agent:
         # /task) must still be honoured. The flag is cleared when the run ends.
         self.session.task = self.session.task or task
         self._system_prompt = self._build_system_prompt(task)
+        self._tool_schemas = self.gate.schemas(task or self.session.task)
         self.session.append(Message.user(task))
 
         self._emit("start", {"task": task, "provider": self.provider.name, "model": self.provider.model})
@@ -353,12 +359,16 @@ class Agent:
             return ""
 
     def _build_system_prompt(self, task: str = "") -> str:
+        # Withheld tools are named, never hidden: a model that cannot see a
+        # tool and does not know it exists will invent a way around it.
+        withheld = self.gate.describe_withheld(task or self.session.task or "")
+        extra = "\n\n".join(part for part in (self.system_extra, withheld) if part)
         return build_system_prompt(
             desktop=self.desktop,
             safety=getattr(self.config, "safety", None),
             skills=self.skills,
             cwd=self.cwd,
-            extra=self.system_extra,
+            extra=extra,
             knowledge=self._knowledge_block(task or self.session.task or ""),
             task=task or self.session.task or "",
         )
@@ -375,7 +385,7 @@ class Agent:
             return self.provider.complete(
                 self.session.messages,
                 system=self._system_prompt,
-                tools=self.registry.to_anthropic(),
+                tools=self._tool_schemas,
                 stream=stream,
             )
         finally:
@@ -467,6 +477,7 @@ class Agent:
         context = self._tool_context()
         blocks: list = []
         terminal: RunResult | None = None
+        unlocked_before = len(self.gate.unlocked)
 
         for call in calls:
             if self.stop_requested.is_set():
@@ -537,6 +548,10 @@ class Agent:
 
         if blocks:
             self.session.append(Message("user", blocks))
+        if len(self.gate.unlocked) != unlocked_before:
+            # `tool_find` just made something callable; the schema list has to
+            # carry it or the model asked for a tool it still cannot reach.
+            self._tool_schemas = self.gate.schemas(self.session.task)
         return terminal
 
     def _maybe_compact(self) -> None:

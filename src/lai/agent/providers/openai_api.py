@@ -204,13 +204,26 @@ def _decode_response(data: dict) -> TurnResult:
         )
 
     usage_raw = data.get("usage") or {}
+    # Several OpenAI-compatible hosts cache the prompt automatically and report
+    # it here. Without reading it, every run looks like it paid full price for a
+    # prompt that was mostly free, and the one number that would tell you
+    # caching is working reads zero.
+    details = usage_raw.get("prompt_tokens_details") or {}
+    cached = int(details.get("cached_tokens", 0) or 0)
+    # The two dialects count differently: Anthropic reports fresh input and
+    # cache reads as separate figures, while `prompt_tokens` here already
+    # contains the cached ones. Subtracting makes `Usage` mean the same thing
+    # whoever answered, so the cost line is not double-counted on one of them.
+    prompt = int(usage_raw.get("prompt_tokens", 0))
     finish = choice.get("finish_reason") or "end_turn"
     return TurnResult(
         message=Message("assistant", blocks),
         stop_reason="tool_use" if finish == "tool_calls" else finish,
         usage=Usage(
-            input_tokens=int(usage_raw.get("prompt_tokens", 0)),
+            input_tokens=max(prompt - cached, 0),
             output_tokens=int(usage_raw.get("completion_tokens", 0)),
+            cache_read_tokens=cached,
+            cache_write_tokens=int(details.get("cache_write_tokens", 0) or 0),
         ),
         model=data.get("model", ""),
         raw=data,

@@ -198,3 +198,37 @@ def test_system_prompt_and_tools_are_included(monkeypatch):
         assert captured["model"] == "m"
     finally:
         provider.close()
+
+
+def test_cached_prompt_tokens_are_reported_separately():
+    """`prompt_tokens` here already contains the cached ones, where Anthropic
+    reports them apart. Usage has to mean one thing whoever answered, or the
+    cost line double-counts on exactly one of the two."""
+    turn = _decode_response({
+        "choices": [{"message": {"content": "hi"}}],
+        "usage": {
+            "prompt_tokens": 16090,
+            "completion_tokens": 99,
+            "prompt_tokens_details": {"cached_tokens": 5504},
+        },
+    })
+    assert turn.usage.cache_read_tokens == 5504
+    assert turn.usage.input_tokens == 16090 - 5504
+    assert turn.usage.input_tokens + turn.usage.cache_read_tokens == 16090
+
+
+def test_a_backend_that_does_not_cache_reports_nothing_cached():
+    turn = _decode_response({
+        "choices": [{"message": {"content": "hi"}}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 4},
+    })
+    assert turn.usage.input_tokens == 11
+    assert turn.usage.cache_read_tokens == 0
+
+
+def test_a_null_details_block_is_not_a_crash():
+    turn = _decode_response({
+        "choices": [{"message": {"content": "hi"}}],
+        "usage": {"prompt_tokens": 11, "prompt_tokens_details": None},
+    })
+    assert turn.usage.input_tokens == 11

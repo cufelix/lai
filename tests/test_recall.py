@@ -148,7 +148,9 @@ def test_every_source_broken_is_simply_empty():
 
 def test_the_agent_puts_it_in_the_system_prompt(tmp_path, journal, memory):
     from lai.agent.loop import Agent
+    from lai.agent.toolgate import ToolGate
     from lai.config import load_config
+    from lai.tools.base import ToolRegistry
 
     journal.write("editor", "- the editor is actually Xed")
     memory.remember("the user prefers dark themes", kind="preference")
@@ -162,6 +164,7 @@ def test_the_agent_puts_it_in_the_system_prompt(tmp_path, journal, memory):
     agent.cwd = None
     agent.system_extra = ""
     agent.session = Session()
+    agent.gate = ToolGate(ToolRegistry())
 
     prompt = agent._build_system_prompt("open the editor with a dark theme")
     assert "Xed" in prompt and "dark themes" in prompt

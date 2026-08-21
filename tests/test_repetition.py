@@ -117,6 +117,7 @@ def test_the_loop_refuses_the_third_attempt_without_running_it(tmp_path):
     from lai.agent.loop import Agent
     from lai.agent.providers.base import ToolCall
     from lai.agent.session import Session
+    from lai.agent.toolgate import ToolGate
     from lai.config import load_config
     from lai.tools.base import ToolResult
 
@@ -133,6 +134,7 @@ def test_the_loop_refuses_the_third_attempt_without_running_it(tmp_path):
     agent = Agent.__new__(Agent)
     agent.config = load_config().with_overrides(home=tmp_path)
     agent.registry = Registry()
+    agent.gate = ToolGate(Registry())
     agent.repetition = Repetition()
     agent.audit = type("A", (), {"write": lambda self, *a, **k: None})()
     agent.session = Session()

@@ -312,6 +312,7 @@ def test_the_loop_announces_a_switch_between_steps():
     agent.session = type("S", (), {"messages": []})()
     agent._system_prompt = ""
     agent.registry = type("R", (), {"to_anthropic": lambda self: []})()
+    agent._tool_schemas = []
     agent.audit = type("A", (), {"write": lambda self, *a, **k: None})()
     agent._emit = lambda kind, payload: events.append((kind, payload))
 

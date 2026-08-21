@@ -27,6 +27,7 @@ from .skills.tools import register as register_skill_tools
 from .tools import build_registry
 from .tools.base import ToolRegistry
 from .tools.control import register as register_control_tools
+from .tools.discovery import register as register_discovery_tools
 
 
 @dataclass(slots=True)
@@ -157,6 +158,7 @@ def build_runtime(
     registry = build_registry(policy=policy, groups=groups)
     register_control_tools(registry)
     register_skill_tools(registry)
+    register_discovery_tools(registry)
 
     skills = SkillRegistry(config.resolved_skill_paths(work_dir))
 

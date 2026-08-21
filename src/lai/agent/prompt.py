@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import time
 from pathlib import Path
+
+from . import relevance
 
 IDENTITY = """\
 You are LAI, an autonomous agent running natively on a Linux desktop.
@@ -166,11 +167,8 @@ def safety_block(safety) -> str:
 SKILL_DETAIL_LIMIT = 6
 """How many skills get a full description in the prompt."""
 
-COMMON_TERM_FRACTION = 0.25
-"""A task word appearing in more than this share of skills is noise, not a match."""
-
-MIN_COMMON_HITS = 2
-"""...but it takes at least this many hits, or a small corpus dismisses real matches."""
+COMMON_TERM_FRACTION = relevance.COMMON_TERM_FRACTION
+MIN_COMMON_HITS = relevance.MIN_COMMON_HITS
 
 
 def skills_block(skills, task: str = "") -> str:
@@ -214,55 +212,13 @@ def skills_block(skills, task: str = "") -> str:
     return "\n".join(lines)
 
 
-def _stem(term: str) -> str:
-    """Crude singular of a task word — enough for matching, not for grammar."""
-    if term.endswith("es") and len(term) > 5:
-        return term[:-2]
-    if term.endswith("s") and not term.endswith("ss") and len(term) > 4:
-        return term[:-1]
-    return term
-
-
 def _rank_skills(available: list, task: str) -> tuple[list, int]:
-    """(skills best-first, how many actually matched the task).
-
-    A keyword score rather than anything cleverer: the corpus is a few dozen
-    short descriptions, and a match that can be explained beats one that cannot.
-    """
-    terms = {t for t in re.split(r"\W+", (task or "").lower()) if len(t) > 3}
-    if not terms:
-        return list(available), 0
-
-    haystacks = [
-        (skill.name.lower(), (skill.description or "").lower()) for skill in available
-    ]
-    # Whole words, not substrings: "open the calculator" was matching every
-    # skill whose description contains "workflow", on the strength of "work".
-    # Plurals are stemmed on both sides, so a task saying "videos" still finds
-    # a skill about "video".
-    patterns = {term: re.compile(rf"\b{re.escape(_stem(term))}(?:e?s)?\b") for term in terms}
-    # A word that appears in half the corpus tells us nothing about which half
-    # to pick: "open the calculator" matched a dozen skills on "open" alone.
-    # Rarity is the signal, and computing it beats maintaining a stopword list.
-    # The floor matters: in a corpus of two, "a quarter of them" is half a
-    # skill, so a single genuine match would be dismissed as noise.
-    noise_threshold = max(MIN_COMMON_HITS, len(available) * COMMON_TERM_FRACTION)
-    common = {
-        term for term, pattern in patterns.items()
-        if sum(bool(pattern.search(f"{name} {body}")) for name, body in haystacks) > noise_threshold
-    }
-    terms -= common
-    if not terms:
-        return list(available), 0
-
-    scored = []
-    for index, ((name, description), skill) in enumerate(zip(haystacks, available, strict=True)):
-        score = sum(6 for term in terms if patterns[term].search(name))
-        score += sum(1 for term in terms if patterns[term].search(description))
-        # index keeps the original order stable among equals
-        scored.append((-score, index, skill))
-    scored.sort()
-    return [skill for _, _, skill in scored], sum(1 for score, _, _ in scored if score < 0)
+    """Skills best-first for this task, and how many actually matched."""
+    return relevance.rank(
+        available, task,
+        name_of=lambda skill: skill.name,
+        text_of=lambda skill: skill.description or "",
+    )
 
 
 def build_system_prompt(
