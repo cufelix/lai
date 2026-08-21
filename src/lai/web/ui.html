@@ -256,6 +256,16 @@
     <h2 style="margin-top:1.4rem">Backends</h2>
     <p class="sub" style="margin:0 0 .4rem">The one in use answers; the rest stand by, in this order.</p>
     <div id="backends"></div>
+
+    <div id="modelPicker" hidden>
+      <div class="row" style="border-top:0">
+        <div class="grow"><b id="pickerTitle">Models</b>
+          <span class="sub" id="pickerNote">free first, then cheapest</span></div>
+        <input type="text" id="modelSearch" placeholder="search…">
+        <button class="iconbtn" id="closePicker">close</button>
+      </div>
+      <div id="modelList" class="notelist"></div>
+    </div>
   </section>
 
   <aside id="side" hidden>
@@ -512,6 +522,11 @@
         backend.resting ? "resting" : backend.status,
       ));
       if (backend.status === "ready") {
+        if (backend.kind !== "cli") {
+          const browse = el("button", "iconbtn", "models");
+          browse.addEventListener("click", () => openPicker(backend.name));
+          row.appendChild(browse);
+        }
         const use = el("button", "iconbtn", data.active === backend.name ? "in use" : "use");
         use.disabled = data.active === backend.name;
         use.addEventListener("click", async () => {

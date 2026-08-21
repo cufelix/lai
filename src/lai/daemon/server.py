@@ -185,6 +185,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, note.to_dict())
 
+    def _send_backend_models(self, name: str) -> None:
+        """What one backend actually serves — asked live, so the choice is real."""
+        from urllib.parse import parse_qs  # noqa: PLC0415
+
+        from ..agent.providers.listing import search  # noqa: PLC0415
+        from ..models import available_models  # noqa: PLC0415
+
+        query = (parse_qs(self.path.partition("?")[2]).get("q") or [""])[0]
+        try:
+            found = available_models(name.strip())
+        except LookupError:
+            self._send(404, {"error": "unknown_backend", "name": name})
+            return
+        except Exception as exc:
+            self._send(502, {"error": "unavailable", "message": str(exc)[:300]})
+            return
+        if query:
+            found = search(found, query)
+        self._send(200, {"backend": name, "models": [m.to_dict() for m in found[:200]]})
+
     def _send_page(self) -> None:
         from ..web import page  # noqa: PLC0415
 
@@ -293,8 +313,11 @@ class Handler(BaseHTTPRequestHandler):
                 found = backend_tools.catalogue(runtime)
                 self._send(200, {
                     "active": runtime.provider.name if runtime.provider else "",
+                    "active_model": runtime.provider.model if runtime.provider else "",
                     "backends": [b.to_dict() for b in found],
                 })
+            elif path.startswith("/models/"):
+                self._send_backend_models(path[len("/models/"):])
             elif path == "/screen":
                 self._send_screenshot(runtime)
             elif path == "/notes":

@@ -300,3 +300,71 @@ def test_the_page_offers_the_three_views(web):
     body = httpx.get(f"{web['url']}/", timeout=5).text
     for view in ("chat", "notes", "settings"):
         assert f'data-page="{view}"' in body
+
+
+# -- choosing a model on a backend ---------------------------------------
+
+
+def test_the_browser_can_list_a_backend_s_models(web, monkeypatch):
+    """A vendor's catalogue is live; OpenRouter alone adds models weekly."""
+    from lai.agent.providers.listing import ModelInfo
+
+    monkeypatch.setattr(
+        "lai.models.available_models",
+        lambda name, **kwargs: [
+            ModelInfo(id="z-ai/glm-5.2:free", context=256000, free=True),
+            ModelInfo(id="anthropic/claude-sonnet-5", context=1000000, prompt_price=2.0),
+        ],
+    )
+    body = httpx.get(f"{web['url']}/models/openrouter", headers=auth(), timeout=5).json()
+    assert body["backend"] == "openrouter"
+    assert body["models"][0]["id"] == "z-ai/glm-5.2:free"
+    assert body["models"][0]["free"] is True
+
+
+def test_the_listing_can_be_searched(web, monkeypatch):
+    from lai.agent.providers.listing import ModelInfo
+
+    monkeypatch.setattr(
+        "lai.models.available_models",
+        lambda name, **kwargs: [ModelInfo(id="a/glm-5"), ModelInfo(id="b/gpt-4o")],
+    )
+    body = httpx.get(f"{web['url']}/models/openrouter?q=glm", headers=auth(), timeout=5).json()
+    assert [m["id"] for m in body["models"]] == ["a/glm-5"]
+
+
+def test_an_unknown_backend_is_a_404(web):
+    assert httpx.get(f"{web['url']}/models/nope", headers=auth(), timeout=5).status_code == 404
+
+
+def test_an_unreachable_vendor_is_reported_not_crashed(web, monkeypatch):
+    def explode(name, **kwargs):
+        raise RuntimeError("could not reach https://openrouter.ai/api/v1/models")
+
+    monkeypatch.setattr("lai.models.available_models", explode)
+    response = httpx.get(f"{web['url']}/models/openrouter", headers=auth(), timeout=5)
+    assert response.status_code == 502
+    assert "could not reach" in response.json()["message"]
+
+
+def test_listing_models_needs_a_token(web):
+    assert httpx.get(f"{web['url']}/models/openrouter", timeout=5).status_code == 401
+
+
+def test_the_browser_can_pin_a_specific_model(web, monkeypatch):
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: FakeProvider(name=config.name, model=config.model),
+    )
+    response = httpx.post(
+        f"{web['url']}/provider", headers=auth(),
+        json={"name": "openrouter", "model": "z-ai/glm-5.2:free"}, timeout=5,
+    )
+    assert response.status_code == 200
+    assert response.json()["provider"] == "openrouter/z-ai/glm-5.2:free"
+    assert web["runtime"].config.provider.model == "z-ai/glm-5.2:free"
+
+
+def test_the_page_offers_a_model_picker(web):
+    body = httpx.get(f"{web['url']}/", timeout=5).text
+    assert 'id="modelPicker"' in body and 'id="modelSearch"' in body

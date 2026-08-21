@@ -16,9 +16,18 @@ from lai.errors import ProviderError
 
 
 class FakeProvider:
-    def __init__(self, name="zai", model="glm-5"):
+    def __init__(self, name="zai", model="glm-5", answer="OK"):
         self.name, self.model = name, model
+        self.answer = answer
         self.closed = False
+
+    def complete(self, messages, **kwargs):
+        from lai.agent.providers.base import Message, TextBlock, TurnResult, Usage
+
+        return TurnResult(
+            message=Message("assistant", [TextBlock(self.answer)]),
+            stop_reason="end_turn", usage=Usage(), model=self.model,
+        )
 
     def close(self):
         self.closed = True
@@ -443,3 +452,91 @@ def test_session_reports_the_current_conversation(runtime):
 
 def test_web_points_at_the_command_that_opens_it(runtime):
     assert "lai web" in run(Context(runtime=runtime), "/web")
+
+
+# -- adding a key and picking a model without leaving the chat -----------
+
+
+def test_a_key_is_verified_before_it_is_saved(runtime, tmp_path, monkeypatch):
+    """A key you find out is wrong during your next task is worse than one
+    that never got saved."""
+    from lai import config_file
+
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: FakeProvider(name=config.name, model="glm-5.2"),
+    )
+    text = run(Context(runtime=runtime), "/key openrouter sk-or-v1-testkey")
+    assert "saved and verified" in text
+    saved = config_file.read(tmp_path)["provider"]
+    assert saved["name"] == "openrouter" and saved["api_key"] == "sk-or-v1-testkey"
+
+
+def test_a_key_that_does_not_work_is_not_saved(runtime, tmp_path, monkeypatch):
+    from lai import config_file
+
+    def refuse(config, **kwargs):
+        raise ProviderError("openrouter: HTTP 401 invalid api key")
+
+    monkeypatch.setattr("lai.agent.providers.registry.build_provider", refuse)
+    text = run(Context(runtime=runtime), "/key openrouter sk-or-wrong")
+    assert "401" in text
+    assert config_file.read(tmp_path) == {}, "nothing may be written until it works"
+
+
+def test_a_model_can_be_pinned_with_the_key(runtime, monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: seen.setdefault("model", config.model) or FakeProvider(
+            name=config.name, model=config.model or "default"
+        ),
+    )
+    run(Context(runtime=runtime), "/key openrouter sk-or-v1-x z-ai/glm-5.2:free")
+    assert seen["model"] == "z-ai/glm-5.2:free"
+
+
+def test_the_key_command_explains_itself(runtime):
+    assert "usage" in run(Context(runtime=runtime), "/key openrouter")
+
+
+def test_models_lists_what_a_backend_serves(runtime, monkeypatch):
+    from lai.agent.providers.listing import ModelInfo
+
+    monkeypatch.setattr(
+        "lai.models.available_models",
+        lambda name, **kwargs: [ModelInfo(id="z-ai/glm-5.2:free", context=256000, free=True)],
+    )
+    text = run(Context(runtime=runtime), "/models openrouter glm")
+    assert "z-ai/glm-5.2:free" in text and "free" in text
+
+
+def test_models_offers_a_menu_when_there_is_one(runtime, monkeypatch):
+    from lai.agent.providers.listing import ModelInfo
+
+    monkeypatch.setattr(
+        "lai.models.available_models",
+        lambda name, **kwargs: [ModelInfo(id="a/one"), ModelInfo(id="b/two")],
+    )
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: FakeProvider(name=config.name, model=config.model),
+    )
+    ctx = Context(runtime=runtime, ask=lambda question, options: 1)
+    assert "b/two" in run(ctx, "/models openrouter")
+
+
+def test_an_unknown_backend_says_so(runtime, monkeypatch):
+    def missing(name, **kwargs):
+        raise LookupError(name)
+
+    monkeypatch.setattr("lai.models.available_models", missing)
+    assert "unknown backend" in run(Context(runtime=runtime), "/models nonsense")
+
+
+def test_a_search_matching_nothing_says_so(runtime, monkeypatch):
+    from lai.agent.providers.listing import ModelInfo
+
+    monkeypatch.setattr("lai.models.available_models",
+                        lambda name, **kwargs: [ModelInfo(id="a/one")])
+    assert "nothing matching" in run(Context(runtime=runtime), "/models openrouter zzz")

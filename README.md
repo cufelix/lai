@@ -181,6 +181,29 @@ lai models test <name>   prove one works
 lai models use <name>    make it the default
 ```
 
+**Choosing a model, not just a vendor.** OpenRouter carries hundreds and adds
+more weekly, so the list is asked for rather than hard-coded:
+
+```
+$ lai models models openrouter glm
+  z-ai/glm-5.2:free      256k ctx · free
+  z-ai/glm-4.7-flash     202k ctx · $0.06/M in
+  z-ai/glm-4.7           204k ctx · $0.4/M in
+…422 model(s) · `lai models use openrouter <model>` to pick one
+```
+
+Free first, then cheapest, with context windows. The same list is a numbered
+menu in the chat (`/models openrouter glm`) and a searchable picker in the
+browser's Settings page. Pinning one verifies it first — "OpenRouter works" and
+"this model works" are different claims.
+
+Adding the key takes one line and never leaves the conversation:
+
+```
+› /key openrouter sk-or-v1-…
+saved and verified openrouter/z-ai/glm-5.2:free replied 'OK'
+```
+
 **Three kinds of backend:**
 
 | Kind | What it is | Key needed |

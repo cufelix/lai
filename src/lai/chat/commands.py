@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from ..config import PERMISSION_MODES
 from . import backends
 
+MODEL_MENU_LIMIT = 20
+"""How many models a menu offers before you are expected to narrow the search."""
+
 QUIT = "\x00quit"
 NEW = "\x00new"
 
@@ -101,6 +104,72 @@ def cmd_model(ctx: Context, arg: str) -> str:
     if index < 0:
         return "[dim]unchanged[/dim]"
     return "[green]now using[/green] " + backends.use(runtime, found[index].name)
+
+
+def cmd_models(ctx: Context, arg: str) -> str:
+    """Browse what a backend serves, and switch to one of its models.
+
+    `/models` alone lists the backends; `/models openrouter claude` searches
+    that vendor's live catalogue; a numbered menu then switches to the choice.
+    """
+    runtime = ctx.runtime
+    words = arg.split()
+    if not words:
+        return cmd_model(ctx, "")
+
+    backend, query = words[0], " ".join(words[1:])
+    try:
+        from ..models import available_models  # noqa: PLC0415
+
+        found = available_models(backend)
+    except LookupError:
+        return f"[red]unknown backend {backend!r}[/red] [dim]— /model lists them[/dim]"
+    except Exception as exc:
+        return f"[red]{exc}[/red]"
+
+    from ..agent.providers.listing import search  # noqa: PLC0415
+
+    if query:
+        found = search(found, query)
+    if not found:
+        return f"[yellow]{backend} serves nothing matching {query!r}[/yellow]"
+
+    shown = found[:MODEL_MENU_LIMIT]
+    if ctx.ask is None:
+        lines = [f"  [cyan]{m.id}[/cyan] [dim]{m.describe()}[/dim]" for m in shown]
+        lines.append(f"[dim]{len(found)} model(s) — /model {backend} <id> to switch[/dim]")
+        return "\n".join(lines)
+
+    index = ctx.ask(
+        f"Which {backend} model?",
+        [f"{m.id}  ({m.describe()})" if m.describe() else m.id for m in shown],
+    )
+    if index < 0:
+        return "[dim]unchanged[/dim]"
+    return "[green]now using[/green] " + backends.use(runtime, backend, model=shown[index].id)
+
+
+def cmd_key(ctx: Context, arg: str) -> str:
+    """Add an API key for a vendor without leaving the conversation.
+
+    `/key openrouter sk-or-…` — verified with a real request before it is
+    saved, because a key you find out is wrong during your next task is worse
+    than one that never got saved.
+    """
+    words = arg.split()
+    if len(words) < 2:
+        return (
+            "[dim]usage: /key <backend> <api-key> [model][/dim]\n"
+            "[dim]e.g.  /key openrouter sk-or-v1-… z-ai/glm-5.2:free[/dim]"
+        )
+    backend, key = words[0], words[1]
+    model = words[2] if len(words) > 2 else ""
+    try:
+        return "[green]saved and verified[/green] " + backends.set_key(
+            ctx.runtime, backend, key, model=model
+        )
+    except Exception as exc:
+        return f"[red]{type(exc).__name__}: {str(exc)[:200]}[/red]"
 
 
 def cmd_fallback(ctx: Context, arg: str) -> str:
@@ -329,6 +398,8 @@ COMMANDS: dict[str, tuple] = {
     "help": (cmd_help, "this list", False),
     "status": (cmd_status, "who is answering, and what stands behind them", False),
     "model": (cmd_model, "switch backend — `/model` to pick from a menu", False),
+    "models": (cmd_models, "browse a backend's models — `/models openrouter claude`", False),
+    "key": (cmd_key, "add an API key: `/key openrouter sk-or-…`", False),
     "fallback": (cmd_fallback, "standby order when a backend refuses", False),
     "mode": (cmd_mode, "permission mode: readonly · ask · auto · yolo", False),
     "new": (cmd_new, "start a fresh session", False),

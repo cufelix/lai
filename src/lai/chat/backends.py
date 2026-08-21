@@ -106,3 +106,42 @@ def save(config: Config, updates: dict) -> None:
 
     existing = config_file.read(config.home)
     config_file.write(config.home, config_file.merge(existing, updates))
+
+
+def set_key(runtime, name: str, key: str, *, model: str = "", persist: bool = True) -> str:
+    """Save an API key for a vendor, after proving it works.
+
+    Verified first, always: a key saved without being tried is a key you
+    discover is wrong on your next real task, when you least want to.
+    """
+    from dataclasses import replace as _replace  # noqa: PLC0415
+
+    from ..agent.providers.base import Message  # noqa: PLC0415
+    from ..agent.providers.registry import build_provider  # noqa: PLC0415
+
+    name, key = (name or "").strip(), (key or "").strip()
+    if not name or not key:
+        raise ProviderError("both a backend and a key are needed")
+
+    candidate = _replace(
+        runtime.config.provider, name=name, model=model, api_key=key,
+        base_url="", max_tokens=16,
+    )
+    provider = build_provider(candidate)
+    try:
+        turn = provider.complete([Message.user("Say OK.")], system="Reply with one word.")
+        answered = (turn.text or "").strip()[:40]
+        resolved = provider.model
+    finally:
+        try:
+            provider.close()
+        except Exception:
+            pass
+
+    use(runtime, name, model=model or resolved, persist=False)
+    runtime.config = runtime.config.with_overrides(
+        provider=_replace(runtime.config.provider, api_key=key)
+    )
+    if persist:
+        save(runtime.config, {"provider": {"name": name, "model": model or resolved, "api_key": key}})
+    return f"{name}/{resolved}" + (f" replied {answered!r}" if answered else "")
