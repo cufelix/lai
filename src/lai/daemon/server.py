@@ -640,6 +640,35 @@ def _replace_limits(limits, max_steps: int):
     return replace(limits, max_steps=max_steps)
 
 
+def serve_in_background(runtime, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
+                        token: str = "") -> tuple:
+    """Serve the browser interface alongside something else, on a thread.
+
+    Shares the caller's runtime rather than building a second one, which is the
+    only arrangement that behaves: two runtimes would mean two agents, one
+    desktop lock, and a browser that cannot see what the terminal is doing.
+
+    Returns (server, url, thread). A port already in use is not an error worth
+    interrupting anybody for — somebody is already serving this — so it comes
+    back as (None, "", None).
+    """
+    import threading as _threading  # noqa: PLC0415
+
+    from ..web import url as web_url  # noqa: PLC0415
+
+    state = DaemonState(runtime=runtime, token=token)
+    try:
+        server = ThreadingHTTPServer((host, port), Handler)
+    except OSError:
+        return None, "", None
+    server.state = state  # type: ignore[attr-defined]
+    server.daemon_threads = True
+
+    thread = _threading.Thread(target=server.serve_forever, daemon=True, name="lai-web")
+    thread.start()
+    return server, web_url(host, port, token), thread
+
+
 def serve(
     config: Config | None = None,
     *,

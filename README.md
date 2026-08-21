@@ -332,9 +332,18 @@ installed; without it, the same interface runs on plain input.
 
 ### In the browser
 
-```bash
-lai web            # opens http://127.0.0.1:8787/#<token>
+It comes up on its own. Typing `lai` starts the conversation *and* the browser
+view beside it, sharing one runtime — so the two are the same session rather
+than two agents fighting over one desktop:
+
 ```
+LAI v1.0.0 — your desktop, driven
+openrouter/z-ai/glm-4.6 · mode auto · 54 tools · 38 skills
+browser view: http://127.0.0.1:8788/#<token>
+```
+
+`[web] autostart = false` turns it off; `open_browser = true` makes it launch a
+window rather than print the link. `lai web` still runs it on its own.
 
 The same agent, the same desktop gate, reached from a tab — in three views:
 

@@ -368,3 +368,64 @@ def test_the_browser_can_pin_a_specific_model(web, monkeypatch):
 def test_the_page_offers_a_model_picker(web):
     body = httpx.get(f"{web['url']}/", timeout=5).text
     assert 'id="modelPicker"' in body and 'id="modelSearch"' in body
+
+
+# -- the browser view alongside the chat ---------------------------------
+
+
+def test_the_web_view_can_share_a_running_runtime(tmp_path, monkeypatch):
+    """Two runtimes would mean two agents, one desktop lock, and a browser that
+    cannot see what the terminal is doing."""
+    import socket as _socket
+
+    from lai.config import load_config
+    from lai.daemon.server import serve_in_background
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path / "home"))
+    config = load_config()
+    config.ensure_dirs()
+    runtime = FakeRuntime(config)
+
+    with _socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    server, address, thread = serve_in_background(runtime, port=port, token="tok")
+    try:
+        assert server is not None and thread.is_alive()
+        assert address.endswith("#tok")
+        body = httpx.get(f"http://127.0.0.1:{port}/status",
+                         headers={"Authorization": "Bearer tok"}, timeout=5).json()
+        assert body["provider"]["name"] == "zai", "it is the caller's runtime, not a new one"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_a_port_already_in_use_is_not_an_error(tmp_path, monkeypatch, web):
+    """Somebody is already serving; that is worth neither a crash nor a second
+    server."""
+    from lai.config import load_config
+    from lai.daemon.server import serve_in_background
+
+    monkeypatch.setenv("LAI_HOME", str(tmp_path / "home2"))
+    config = load_config()
+    config.ensure_dirs()
+    taken = int(web["url"].rsplit(":", 1)[1])
+
+    server, address, thread = serve_in_background(FakeRuntime(config), port=taken, token="t")
+    assert (server, address, thread) == (None, "", None)
+
+
+def test_the_page_renders_markdown_without_innerhtml(web):
+    """Every word on that page came from a model or a window title."""
+    body = httpx.get(f"{web['url']}/", timeout=5).text
+    assert "function markdown" in body
+    assert "innerHTML" not in body.replace("assigning innerHTML", "")
+
+
+def test_the_page_shows_progress_and_a_way_to_stop(web):
+    body = httpx.get(f"{web['url']}/", timeout=5).text
+    assert 'id="runstate"' in body
+    assert "Esc" in body and "stop" in body

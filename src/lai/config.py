@@ -184,6 +184,23 @@ class LearningConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class WebConfig:
+    """The browser view that runs alongside the chat.
+
+    On by default: it costs one thread and a loopback port, and it shows the
+    things a terminal cannot — the live screen, the notes, the settings — while
+    you are talking to the agent in the same session.
+    """
+
+    autostart: bool = True
+    open_browser: bool = False
+    """Starting a browser window unasked is a step too far; the URL is printed."""
+    host: str = "127.0.0.1"
+    port: int = 8788
+    """Deliberately not the daemon's 8787, so `lai` and `lai serve` coexist."""
+
+
+@dataclass(frozen=True, slots=True)
 class LimitsConfig:
     max_steps: int = 60
     max_seconds: float = 1800.0
@@ -201,6 +218,7 @@ class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     channels: ChannelsConfig = field(default_factory=ChannelsConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    web: WebConfig = field(default_factory=WebConfig)
     skill_paths: tuple[str, ...] = DEFAULT_SKILL_PATHS
     mcp_config_paths: tuple[str, ...] = (
         "{home}/mcp.json", "{cwd}/.mcp.json", "~/.claude/mcp-configs/mcp-servers.json",
@@ -411,6 +429,14 @@ def load_config(
         max_notes_in_prompt=int(learning_data.get("max_notes_in_prompt", 6)),
     )
 
+    web_data = _section(data, "web")
+    web = WebConfig(
+        autostart=_bool(env.get("LAI_WEB"), web_data.get("autostart", True)),
+        open_browser=_bool(env.get("LAI_WEB_OPEN"), web_data.get("open_browser", False)),
+        host=str(web_data.get("host", "127.0.0.1")),
+        port=int(env.get("LAI_WEB_PORT", web_data.get("port", 8788))),
+    )
+
     telegram_data = _section(channels_data, "telegram")
     discord_data = _section(channels_data, "discord")
     webhook_data = _section(channels_data, "webhook")
@@ -433,6 +459,7 @@ def load_config(
         limits=limits,
         channels=channels,
         learning=learning,
+        web=web,
         skill_paths=_tuple(data.get("skill_paths"), DEFAULT_SKILL_PATHS),
         mcp_config_paths=_tuple(data.get("mcp_config_paths"), _CONFIG_DEFAULTS.mcp_config_paths),
         log_level=env.get("LAI_LOG_LEVEL", data.get("log_level", "info")),

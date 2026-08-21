@@ -12,6 +12,7 @@ dependency must never be the difference between a usable tool and none.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -148,7 +149,10 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False, resume
         say=out.write,
     )
 
+    web = _start_web(out, runtime)
     _welcome(out, runtime)
+    if web:
+        out.write(f"[dim]browser view: [cyan]{web}[/cyan][/dim]")
     if resume:
         out.write(f"[green]↺ {resumed}[/green]" if session.messages else f"[yellow]{resumed}[/yellow]")
 
@@ -240,6 +244,38 @@ def _asker(out, reader: Reader):
         return int(answer) - 1
 
     return ask
+
+
+def _start_web(out, runtime) -> str:
+    """Bring up the browser view beside the conversation.
+
+    It shares this runtime, so the two are the same session rather than two
+    agents fighting over one desktop. A port already in use means somebody is
+    already serving — worth neither an error nor a second server.
+    """
+    settings = getattr(runtime.config, "web", None)
+    if settings is None or not settings.autostart:
+        return ""
+    try:
+        from ..daemon.server import _load_or_create_token, serve_in_background  # noqa: PLC0415
+
+        server, address, _thread = serve_in_background(
+            runtime,
+            host=settings.host,
+            port=settings.port,
+            token=_load_or_create_token(runtime.config),
+        )
+    except Exception:
+        return ""  # a browser view is a bonus; never a reason not to start
+    if server is None:
+        return ""
+    runtime.extra["web_server"] = server
+    if settings.open_browser:
+        import webbrowser  # noqa: PLC0415
+
+        with contextlib.suppress(Exception):
+            webbrowser.open(address, new=2)
+    return address
 
 
 def _confirmer(out, reader: Reader):
