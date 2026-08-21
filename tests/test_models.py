@@ -18,7 +18,7 @@ from lai.models import KIND_API, KIND_CLI, KIND_LOCAL, KNOWN, READY, Backend, ch
 def test_every_vendor_is_completely_specified():
     for vendor in catalog.ALL_VENDORS:
         assert vendor.name and vendor.label, vendor
-        assert vendor.base_url.startswith("http"), vendor.name
+        assert vendor.url({}).startswith("http"), vendor.name
         assert vendor.default_model, vendor.name
         assert vendor.local or vendor.env_keys, f"{vendor.name} is hosted but names no key"
 
@@ -250,3 +250,22 @@ def test_check_spends_only_a_tiny_request(monkeypatch):
     monkeypatch.setattr("lai.agent.providers.registry.build_provider", capture)
     check("groq")
     assert seen["max_tokens"] <= 32
+
+
+def test_a_per_account_endpoint_comes_from_the_environment():
+    """Azure gives every resource its own hostname; that cannot be a constant."""
+    azure = next(v for v in catalog.ALL_VENDORS if v.name == "azure")
+    assert azure.url_env == "AZURE_OPENAI_ENDPOINT"
+    assert azure.url({"AZURE_OPENAI_ENDPOINT": "https://acme.openai.azure.com/openai/v1/"}) == (
+        "https://acme.openai.azure.com/openai/v1"
+    )
+
+
+def test_a_vendor_without_a_per_account_url_ignores_the_environment():
+    openai = next(v for v in catalog.ALL_VENDORS if v.name == "openai")
+    assert openai.url({"AZURE_OPENAI_ENDPOINT": "https://wrong.test"}) == openai.base_url
+
+
+def test_an_unset_per_account_url_falls_back_to_the_placeholder():
+    azure = next(v for v in catalog.ALL_VENDORS if v.name == "azure")
+    assert azure.url({}) == azure.base_url

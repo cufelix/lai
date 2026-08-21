@@ -33,11 +33,29 @@ class Vendor:
     notes: str = ""
     model_env: str = ""
     """Environment variable overriding the default model."""
+    url_env: str = ""
+    """Environment variable holding the base URL, when it is per-account.
+
+    Azure OpenAI gives every resource its own hostname, and a self-hosted
+    endpoint behind a company domain is the same shape. Those cannot be a
+    constant in a table, but they are still just data — one more variable.
+    """
     extra_headers: dict = field(default_factory=dict)
 
     @property
     def needs_key(self) -> bool:
         return not self.local and bool(self.env_keys)
+
+    def url(self, env=None) -> str:
+        """The base URL, taking the per-account one when this vendor has one."""
+        import os  # noqa: PLC0415
+
+        env = os.environ if env is None else env
+        if self.url_env:
+            configured = str(env.get(self.url_env, "")).strip().rstrip("/")
+            if configured:
+                return configured
+        return self.base_url
 
 
 # Hosted vendors, roughly in order of how likely someone is to have one.
@@ -88,6 +106,46 @@ VENDORS: tuple[Vendor, ...] = (
            "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-vl-max",
            ("DASHSCOPE_API_KEY", "QWEN_API_KEY"), "https://dashscope.console.aliyun.com",
            model_env="QWEN_MODEL"),
+    Vendor("zai-coding", "Z.ai coding plan (OpenAI dialect)",
+           "https://api.z.ai/api/coding/paas/v4", "glm-4.6",
+           ("ZAI_API_KEY", "GLM_API_KEY"), "https://z.ai",
+           model_env="ZAI_MODEL", notes="the coding-plan endpoint, priced per plan not per token"),
+    Vendor("sambanova", "SambaNova", "https://api.sambanova.ai/v1",
+           "Meta-Llama-3.3-70B-Instruct", ("SAMBANOVA_API_KEY",),
+           "https://cloud.sambanova.ai/apis", vision=False, model_env="SAMBANOVA_MODEL"),
+    Vendor("hyperbolic", "Hyperbolic", "https://api.hyperbolic.xyz/v1",
+           "meta-llama/Llama-3.3-70B-Instruct", ("HYPERBOLIC_API_KEY",),
+           "https://app.hyperbolic.xyz/settings", model_env="HYPERBOLIC_MODEL"),
+    Vendor("novita", "Novita AI", "https://api.novita.ai/v3/openai",
+           "meta-llama/llama-3.3-70b-instruct", ("NOVITA_API_KEY",),
+           "https://novita.ai/settings/key-management", model_env="NOVITA_MODEL"),
+    Vendor("github", "GitHub Models", "https://models.github.ai/inference",
+           "openai/gpt-4o", ("GITHUB_TOKEN", "GITHUB_MODELS_TOKEN"),
+           "https://github.com/settings/tokens", model_env="GITHUB_MODEL",
+           notes="free tier for anyone with a GitHub token"),
+    Vendor("huggingface", "Hugging Face Inference",
+           "https://router.huggingface.co/v1", "meta-llama/Llama-3.3-70B-Instruct",
+           ("HF_TOKEN", "HUGGINGFACE_API_KEY"), "https://huggingface.co/settings/tokens",
+           model_env="HF_MODEL"),
+    Vendor("azure", "Azure OpenAI", "https://YOUR-RESOURCE.openai.azure.com/openai/v1",
+           "gpt-4o", ("AZURE_OPENAI_API_KEY",), "https://portal.azure.com",
+           model_env="AZURE_OPENAI_MODEL", url_env="AZURE_OPENAI_ENDPOINT",
+           notes="every resource has its own hostname — set AZURE_OPENAI_ENDPOINT"),
+    Vendor("venice", "Venice AI (private)", "https://api.venice.ai/api/v1",
+           "llama-3.3-70b", ("VENICE_API_KEY",), "https://venice.ai/settings/api",
+           model_env="VENICE_MODEL", notes="no logging, no retention"),
+    Vendor("chutes", "Chutes", "https://llm.chutes.ai/v1",
+           "deepseek-ai/DeepSeek-V3", ("CHUTES_API_KEY",), "https://chutes.ai",
+           vision=False, model_env="CHUTES_MODEL"),
+    Vendor("baseten", "Baseten", "https://inference.baseten.co/v1",
+           "deepseek-ai/DeepSeek-V3", ("BASETEN_API_KEY",), "https://app.baseten.co/settings/api_keys",
+           vision=False, model_env="BASETEN_MODEL"),
+    Vendor("lambda", "Lambda Inference", "https://api.lambda.ai/v1",
+           "llama3.3-70b-instruct-fp8", ("LAMBDA_API_KEY",), "https://cloud.lambda.ai/api-keys",
+           vision=False, model_env="LAMBDA_MODEL"),
+    Vendor("inception", "Inception (diffusion LLMs)", "https://api.inceptionlabs.ai/v1",
+           "mercury-coder", ("INCEPTION_API_KEY",), "https://platform.inceptionlabs.ai",
+           vision=False, model_env="INCEPTION_MODEL"),
 )
 
 # Things running on this machine. Probed by connecting, never by a key.
@@ -109,6 +167,14 @@ LOCAL_VENDORS: tuple[Vendor, ...] = (
            model_env="LITELLM_MODEL", notes="one endpoint in front of many vendors"),
     Vendor("jan", "Jan", "http://127.0.0.1:1337/v1", "local-model",
            (), "https://jan.ai", local=True, model_env="JAN_MODEL"),
+    Vendor("koboldcpp", "KoboldCpp", "http://127.0.0.1:5001/v1", "local-model",
+           (), "https://github.com/LostRuins/koboldcpp", local=True,
+           model_env="KOBOLD_MODEL"),
+    Vendor("textgen", "text-generation-webui", "http://127.0.0.1:5000/v1", "local-model",
+           (), "https://github.com/oobabooga/text-generation-webui", local=True,
+           model_env="TEXTGEN_MODEL", notes="enable the OpenAI extension"),
+    Vendor("localai", "LocalAI", "http://127.0.0.1:8080/v1", "local-model",
+           (), "https://localai.io", local=True, model_env="LOCALAI_MODEL"),
 )
 
 ALL_VENDORS: tuple[Vendor, ...] = VENDORS + LOCAL_VENDORS

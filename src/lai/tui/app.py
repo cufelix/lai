@@ -366,6 +366,8 @@ class LaiApp(App):
             )
             self.write(f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]")
             bar.provider = f"{payload['to']}/{payload.get('model', '')}"
+        elif kind == "repeating":
+            self.write(f"[yellow]↺ refused a repeated {payload.get('name')}[/yellow]")
         elif kind == "yielding":
             self.write("[yellow]⏸ you are using the machine — waiting[/yellow]")
         elif kind == "resumed":

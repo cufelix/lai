@@ -48,6 +48,8 @@ class Runtime:
     memory: object | None = None
     journal: object | None = None
     desktop_lock: object | None = None
+    virtual_display: object | None = None
+    """A second X server this runtime started, and must therefore shut down."""
     scheduler: object | None = None
     task_store: object | None = None
     extra: dict = field(default_factory=dict)
@@ -84,6 +86,7 @@ class Runtime:
             journal=self.journal,
             desktop_lock=self.desktop_lock,
             memory=self.memory,
+            on_own_screen=self.virtual_display is not None,
         )
         # Shared, long-lived services the tools reach through ToolContext.extra.
         # `agent` is set last so `delegate` can spawn a child of this very run.
@@ -99,6 +102,7 @@ class Runtime:
     def close(self) -> None:
         for closer in (
             getattr(self.scheduler, "stop", None),
+            getattr(self.virtual_display, "stop", None),
             getattr(self.memory, "close", None),
             getattr(self.mcp_pool, "close_all", None),
             getattr(self.provider, "close", None),
@@ -116,6 +120,7 @@ def build_runtime(
     config: Config | None = None,
     *,
     cwd: Path | None = None,
+    virtual: bool = False,
     with_provider: bool = True,
     with_mcp: bool = True,
     groups: set[str] | None = None,
@@ -127,10 +132,15 @@ def build_runtime(
     config.ensure_dirs()
     work_dir = Path(cwd or Path.cwd())
 
+    # A display of the agent's own, when asked for: its own pointer, its own
+    # focus, its own window stack. The human keeps typing in theirs.
+    screen = _start_virtual_display(config) if virtual else None
+    display = screen.display if screen is not None else (config.desktop.display or None)
+
     desktop = Desktop(
         max_edge=config.desktop.max_edge,
         a11y_timeout_ms=config.desktop.a11y_timeout_ms,
-        display=config.desktop.display or None,
+        display=display,
     )
 
     policy = PolicyEngine(
@@ -160,7 +170,7 @@ def build_runtime(
 
     memory = _open_memory(config)
     journal = _open_journal(config)
-    desktop_lock = _open_desktop_lock(config)
+    desktop_lock = _open_desktop_lock(config, display=desktop.display)
     task_store = _open_task_store(config)
 
     mcp_pool = None
@@ -185,6 +195,7 @@ def build_runtime(
         memory=memory,
         journal=journal,
         desktop_lock=desktop_lock,
+        virtual_display=screen,
         task_store=task_store,
     )
 
@@ -218,14 +229,30 @@ def _attach_mcp(config: Config, registry: ToolRegistry, cwd: Path):
         return None, [], {"_connect": str(exc)}
 
 
-def _open_desktop_lock(config: Config):
-    """The cross-process claim on the desktop. Absent means unguarded, not broken."""
+def _open_desktop_lock(config: Config, *, display: str = ""):
+    """The cross-process claim on *this* desktop.
+
+    Keyed by display, because that is what is actually being contended: an
+    agent working on its own virtual screen takes nothing away from the person
+    using the real one, and making it queue behind them would defeat the point.
+    """
     try:
         from .osl.lock import DesktopLock  # noqa: PLC0415
 
-        return DesktopLock.for_home(config.home)
+        suffix = (display or "").replace(":", "").replace(".", "-")
+        name = f"desktop{'-' + suffix if suffix not in ('', '0') else ''}.lock"
+        return DesktopLock(Path(config.home) / name)
     except Exception:
         return None
+
+
+def _start_virtual_display(config: Config):
+    """Bring up a second X server for the agent to work on."""
+    from .osl.virtual import VirtualDisplay  # noqa: PLC0415
+
+    screen = VirtualDisplay(size=(config.desktop.virtual_width, config.desktop.virtual_height))
+    screen.start()
+    return screen
 
 
 def _open_journal(config: Config):

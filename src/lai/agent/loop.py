@@ -13,7 +13,7 @@ import contextlib
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..errors import Interrupted, LaiError, ProviderError
@@ -30,6 +30,7 @@ from .providers.base import (
     ToolResultBlock,
     Usage,
 )
+from .repetition import Repetition
 from .session import Session
 
 EventCallback = Callable[[str, dict], None]
@@ -117,6 +118,7 @@ class Agent:
         journal=None,
         desktop_lock=None,
         memory=None,
+        on_own_screen: bool = False,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -130,6 +132,10 @@ class Agent:
         self.desktop_lock = desktop_lock
         """Cross-process claim on the desktop, held for the length of a run."""
         self._idle_probe = None
+        self.on_own_screen = bool(on_own_screen)
+        """True when this agent has a display to itself, so it shares nothing."""
+        self.repetition = Repetition()
+        """Notices the same failing call being made over and over."""
         self.memory = memory
         """Long-term store; recalled into the prompt, not only via tools."""
         self.session = session or Session()
@@ -386,6 +392,11 @@ class Agent:
         safety = getattr(self.config, "safety", None)
         if safety is None or not getattr(safety, "yield_to_user", False):
             return
+        if self.on_own_screen:
+            # Nothing to yield: the human's mouse is on another display
+            # entirely, and waiting for them to stop typing would mean an agent
+            # that idles precisely because its owner is working.
+            return
         try:
             spec = self.registry.get(tool_name)
         except Exception:
@@ -455,8 +466,26 @@ class Agent:
                 raise Interrupted("stopped by user")
 
             self._emit("tool_call", {"name": call.name, "input": call.input, "id": call.id})
+
+            refusal = self.repetition.should_refuse(call.name, call.input)
+            if refusal:
+                # Cheaper than the turn it would have cost, and more useful:
+                # the model is told why, and what would actually be different.
+                self._emit("repeating", {"name": call.name, "id": call.id})
+                self.audit.write("refused_repeat", tool=call.name)
+                blocks.append(ToolResultBlock(call.id, refusal, is_error=True))
+                self._emit("tool_result", {"name": call.name, "ok": False,
+                                           "summary": refusal.splitlines()[0], "images": 0,
+                                           "duration": 0.0})
+                continue
+
             self._yield_to_human(call.name)
             result: ToolResult = self.registry.call(call.name, call.input, context)
+            warning = self.repetition.record(
+                call.name, call.input, ok=result.ok, content=result.content
+            )
+            if warning:
+                result = replace(result, content=result.content + warning)
             self._emit(
                 "tool_result",
                 {

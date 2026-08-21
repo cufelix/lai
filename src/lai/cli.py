@@ -241,6 +241,12 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
                 f"  [green]continuing on {payload['to']}/{payload.get('model', '')}[/green]"
             )
             spin()
+        elif kind == "repeating":
+            halt()
+            out.write(
+                f"[yellow]↺ refused a third identical {payload.get('name')} — "
+                "it failed the same way twice[/yellow]"
+            )
         elif kind == "yielding":
             halt()
             out.write(
@@ -303,7 +309,7 @@ def _no_provider(out: Out, runtime) -> int:
 def cmd_do(args) -> int:
     out = Out(quiet=args.json)
     config = _apply_overrides(load_config(), args)
-    runtime = build_runtime(config, with_mcp=not args.no_mcp)
+    runtime = build_runtime(config, with_mcp=not args.no_mcp, virtual=_virtual(args))
     try:
         if runtime.provider is None:
             return _no_provider(out, runtime)
@@ -325,7 +331,7 @@ def cmd_do(args) -> int:
 def cmd_chat(args) -> int:
     """The conversational interface — what bare `lai` runs."""
     config = _apply_overrides(load_config(), args)
-    runtime = build_runtime(config, with_mcp=not args.no_mcp)
+    runtime = build_runtime(config, with_mcp=not args.no_mcp, virtual=_virtual(args))
     try:
         from .chat import run_chat  # noqa: PLC0415
 
@@ -340,6 +346,10 @@ def cmd_chat(args) -> int:
         runtime.close()
 
 
+def _virtual(args) -> bool:
+    return bool(getattr(args, "virtual", False))
+
+
 def _resume_choice(args) -> str:
     """`--continue` means the most recent; `--resume <id>` means that one."""
     if getattr(args, "resume", None):
@@ -350,7 +360,7 @@ def _resume_choice(args) -> str:
 def cmd_repl(args) -> int:
     out = Out()
     config = _apply_overrides(load_config(), args)
-    runtime = build_runtime(config, with_mcp=not args.no_mcp)
+    runtime = build_runtime(config, with_mcp=not args.no_mcp, virtual=_virtual(args))
     if runtime.provider is None:
         code = _no_provider(out, runtime)
         runtime.close()
@@ -780,7 +790,7 @@ def cmd_tui(args) -> int:
         Out().error("the TUI needs a real terminal — in a script use `lai do` or `lai repl`")
         return 2
     config = _apply_overrides(load_config(), args)
-    runtime = build_runtime(config, with_mcp=not args.no_mcp)
+    runtime = build_runtime(config, with_mcp=not args.no_mcp, virtual=_virtual(args))
     try:
         from .tui import run_tui  # noqa: PLC0415
     except ImportError as exc:
@@ -1033,6 +1043,64 @@ def _format_time(stamp: float | None) -> str:
     return time.strftime("%a %d %b %H:%M", time.localtime(stamp))
 
 
+def _list_models(out: Out, args, backends) -> int:
+    """What one backend actually serves, asked live rather than hard-coded."""
+    if not args.name:
+        out.error("usage: lai models models <backend> [search terms]")
+        return 2
+    try:
+        found = backends.available_models(args.name)
+    except LookupError:
+        out.error(f"unknown backend {args.name!r} — `lai models` lists them")
+        return 1
+    except LaiError as exc:
+        out.error(str(exc))
+        return 1
+
+    from .agent.providers.listing import search  # noqa: PLC0415
+
+    if args.model:
+        found = search(found, args.model)
+    if args.json:
+        print(json.dumps([m.to_dict() for m in found], indent=2))
+        return 0
+    if not found:
+        out.write(f"[yellow]nothing matching {args.model!r}[/yellow]")
+        return 1
+
+    shown = found if args.all else found[:30]
+    width = min(max(len(m.id) for m in shown) + 2, 60)
+    for model in shown:
+        out.write(f"  [cyan]{model.id:<{width}}[/cyan] [dim]{model.describe()}[/dim]")
+    if len(found) > len(shown):
+        out.write(f"[dim]…and {len(found) - len(shown)} more — add search terms, or --all[/dim]")
+    out.write(f"\n[dim]{len(found)} model(s) · `lai models use {args.name} <model>` to pick one[/dim]")
+    return 0
+
+
+def _use_model(out: Out, args, backends) -> int:
+    """Pin a specific model on a backend — the choice OpenRouter exists for."""
+    from . import config_file  # noqa: PLC0415
+
+    works, detail = backends.check(args.name, model=args.model)
+    if not works and not args.force:
+        out.error(f"{args.name}/{args.model} does not work: {detail}")
+        out.write("[dim]`lai models models " + args.name + "` lists what it serves[/dim]")
+        return 1
+
+    config = load_config()
+    settings = config_file.merge(
+        config_file.read(config.home), {"provider": {"name": args.name, "model": args.model}}
+    )
+    path = config_file.write(config.home, settings)
+    out.write(
+        f"[green]✓[/green] now using [bold]{args.name}/{args.model}[/bold] [dim]({path})[/dim]"
+    )
+    if works:
+        out.write(f"  [dim]{detail}[/dim]")
+    return 0
+
+
 def cmd_models(args) -> int:
     """List, test and choose a model backend."""
     out = Out(quiet=getattr(args, "json", False))
@@ -1049,10 +1117,15 @@ def cmd_models(args) -> int:
         out.write(f"[green]✓ works[/green] [dim]{detail}[/dim]" if works else f"[red]✗ {detail}[/red]")
         return 0 if works else 1
 
+    if action in ("models", "list-models"):
+        return _list_models(out, args, backends)
+
     if action == "use":
         if not args.name:
-            out.error("usage: lai models use <name>")
+            out.error("usage: lai models use <name> [model]")
             return 2
+        if args.model:
+            return _use_model(out, args, backends)
         works, detail = backends.check(args.name)
         if not works and not args.force:
             out.error(f"{args.name} does not work yet: {detail}")
@@ -1157,6 +1230,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--thinking", type=int, help="Extended thinking budget in tokens")
         p.add_argument("--dry-run", action="store_true", help="Block all side effects")
         p.add_argument("--no-mcp", action="store_true", help="Skip external MCP servers")
+        p.add_argument(
+            "--virtual", action="store_true",
+            help="Work on a screen of its own, so you can keep using yours",
+        )
         p.add_argument("--verbose", "-v", action="store_true")
 
     p_do = sub.add_parser(
@@ -1333,8 +1410,15 @@ def build_parser() -> argparse.ArgumentParser:
               lai models use cli:claude  think with the installed claude CLI — no API key
         """),
     )
-    p_models.add_argument("action", nargs="?", choices=["list", "test", "use"], default="list")
-    p_models.add_argument("name", nargs="?", default="", help="Backend name, e.g. groq or cli:claude")
+    p_models.add_argument(
+        "action", nargs="?", default="list",
+        choices=["list", "test", "use", "models", "list-models"],
+    )
+    p_models.add_argument("name", nargs="?", default="", help="Backend name, e.g. groq or openrouter")
+    p_models.add_argument(
+        "model", nargs="?", default="",
+        help="Model id to pin (with `use`), or search terms (with `models`)",
+    )
     p_models.add_argument("--all", action="store_true", help="Include every known vendor")
     p_models.add_argument("--no-probe", action="store_true", help="Skip probing local servers")
     p_models.add_argument("--force", action="store_true", help="`use` even if the check fails")

@@ -387,6 +387,9 @@
         if (event.images) refreshScreen();
         break;
       }
+      case "repeating":
+        put(el("div", "note switch", `↺ refused a repeated ${event.name} — it failed the same way twice`));
+        break;
       case "yielding":
         put(el("div", "note switch", "⏸ you are using the machine — waiting for you to finish"));
         break;

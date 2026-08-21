@@ -123,7 +123,7 @@ def _catalog_credentials(env, already: set[str]) -> list[Credential]:
             continue
         model = (env.get(vendor.model_env) or "").strip() if vendor.model_env else ""
         found.append(
-            Credential(vendor.name, key, vendor.base_url, model or vendor.default_model,
+            Credential(vendor.name, key, vendor.url(env), model or vendor.default_model,
                        source_of(vendor, env))
         )
     return found
@@ -342,7 +342,7 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
         return OpenAIProvider(
             api_key=key or "local",
             model=model or vendor.default_model,
-            base_url=base_url or vendor.base_url,
+            base_url=base_url or vendor.url(),
             max_tokens=config.max_tokens,
             temperature=config.temperature,
             timeout=config.timeout,

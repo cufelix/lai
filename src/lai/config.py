@@ -134,6 +134,9 @@ class DesktopConfig:
     settle_timeout: float = 3.0
     annotate_screenshots: bool = False
     display: str = ""
+    virtual_width: int = 1920
+    virtual_height: int = 1080
+    """Size of the agent's own screen, when it is given one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +392,8 @@ def load_config(
         settle_timeout=float(desktop_data.get("settle_timeout", 3.0)),
         annotate_screenshots=bool(desktop_data.get("annotate_screenshots", False)),
         display=env.get("LAI_DISPLAY", desktop_data.get("display", "")),
+        virtual_width=int(desktop_data.get("virtual_width", 1920)),
+        virtual_height=int(desktop_data.get("virtual_height", 1080)),
     )
 
     limits = LimitsConfig(

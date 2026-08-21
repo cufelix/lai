@@ -32,6 +32,7 @@ APT_PACKAGES = {
     "a11y": "python3-gi gir1.2-atspi-2.0 gir1.2-gtk-3.0",
     "tesseract": "tesseract-ocr",
     "ffmpeg": "ffmpeg",
+    "xvfb": "xvfb",
 }
 
 
@@ -443,6 +444,34 @@ def check_coders() -> Check:
     )
 
 
+def check_virtual_display() -> Check:
+    """Whether the agent can be given a screen of its own.
+
+    Optional: without it the agent shares your mouse, which is the right
+    default. With it, it can work while you carry on — and Xvfb is the one
+    worth having, because a nested Xephyr window still sits on your desktop.
+    """
+    from .osl.virtual import available  # noqa: PLC0415
+
+    found = available()
+    if "Xvfb" in found:
+        return Check("virtual", "own screen (Xvfb)", OK,
+                     "available — `--virtual` runs off-screen", required=False)
+    if found:
+        return Check(
+            "virtual", "own screen", WARN,
+            f"only {', '.join(found)} — nested, so it appears in a window on your desktop",
+            fix=_install_fix("Xvfb", APT_PACKAGES["xvfb"]),
+            required=False,
+        )
+    return Check(
+        "virtual", "own screen", WARN,
+        "not installed — the agent shares your mouse and keyboard",
+        fix=_install_fix("Xvfb", APT_PACKAGES["xvfb"]),
+        required=False,
+    )
+
+
 def check_recorder() -> Check:
     if shutil.which("ffmpeg"):
         return Check("recorder", "screen recording (ffmpeg)", OK, "available", required=False)
@@ -482,7 +511,7 @@ def run_checks(runtime=None, config=None, *, include_optional: bool = True) -> R
         lambda: check_provider(runtime),
     ]
     if include_optional:
-        probes.extend([check_ocr, check_recorder, check_coders])
+        probes.extend([check_ocr, check_recorder, check_coders, check_virtual_display])
     if config is not None:
         probes.append(lambda: check_config(config))
 

@@ -257,6 +257,7 @@ script if you already have one. If a key is already in your environment,
 lai                             # setup if new, otherwise the chat interface
 lai --continue                  # pick up the last conversation
 lai do "<task>"                 # one autonomous run
+lai do "<task>" --virtual       # …on a screen of its own, so you keep yours
 lai web                         # the same agent, in your browser
 lai tui                         # full-screen dashboard
 lai repl                        # plain interactive session
@@ -505,6 +506,31 @@ deny = ["cli:claude", "anthropic"]
 A denied backend is not auto-detected, not fallen back to, not listed and not
 offered in a menu — and asking for one explicitly is an error rather than a
 silent substitution. `LAI_DENY=anthropic` does the same for one run.
+
+### A screen of its own
+
+By default LAI drives *your* desktop — one mouse, one focus, taken in turns.
+That is the right default: the point is acting on the machine you actually use.
+But when you would rather keep working, give it a screen of its own:
+
+```bash
+lai do "open the calculator and work out 12 * 34" --virtual
+```
+
+It starts a second X server with its own root window, its own pointer and its
+own focus. Applications it launches live there, screenshots come from there,
+and nothing it does reaches your keyboard, your clipboard or your window stack.
+Two agents, two screens, no queueing — the desktop claim is per-display.
+
+| | |
+|---|---|
+| **Xvfb** | entirely off-screen. Watch through `lai web` or a screenshot, or don't watch at all. |
+| **Xephyr** | nested in a window on your desktop, so you can see it working. Good for the first few times. |
+
+`lai doctor` says which you have and offers to install Xvfb. A window manager
+is started alongside, because without one applications have no decorations,
+cannot be maximised, and frequently never receive focus — which looks exactly
+like a broken agent.
 
 ### It gets out of your way
 

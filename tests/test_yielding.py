@@ -96,6 +96,7 @@ def _agent(monkeypatch, tmp_path, *, risk, idle, yield_to_user=True):
     agent.events: list = []
     agent._emit = lambda kind, payload: agent.events.append((kind, payload))
     agent._idle_probe = idle
+    agent.on_own_screen = False
     return agent, Risk
 
 
@@ -152,3 +153,17 @@ def test_a_setting_survives_the_round_trip(tmp_path, monkeypatch):
     )
     safety = load_config().safety
     assert safety.yield_to_user is False and safety.user_idle_seconds == 9.5
+
+
+def test_an_agent_on_its_own_screen_never_waits(tmp_path, monkeypatch):
+    """Waiting for the human to stop typing would mean an agent that idles
+    precisely because its owner is working — the opposite of the point."""
+    from lai.safety.policy import Risk
+
+    def busy():
+        raise AssertionError("a separate display shares nothing with the human")
+
+    agent, _ = _agent(monkeypatch, tmp_path, risk=Risk.INPUT, idle=busy)
+    agent.on_own_screen = True
+    agent._yield_to_human("computer_click")
+    assert agent.events == []
