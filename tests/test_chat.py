@@ -649,3 +649,51 @@ def test_without_a_way_to_ask_it_names_the_command_instead(runtime, monkeypatch)
     )
     ctx = Context(runtime=runtime, ask=lambda q, options: 0)
     assert "/key openrouter" in run(ctx, "/model")
+
+
+def test_switching_model_keeps_the_key_that_was_just_verified(runtime, monkeypatch):
+    """Changing which OpenRouter model to use must not throw away OpenRouter's
+    key — that is how the guided flow used to fail one step after succeeding."""
+    from dataclasses import replace
+
+    runtime.config = runtime.config.with_overrides(
+        provider=replace(runtime.config.provider, name="openrouter", api_key="sk-or-live")
+    )
+    seen: dict = {}
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: seen.update(key=config.api_key) or FakeProvider(
+            name=config.name, model=config.model
+        ),
+    )
+    backends.use(runtime, "openrouter", model="some/model", persist=False)
+    assert seen["key"] == "sk-or-live"
+
+
+def test_switching_to_a_different_backend_still_drops_the_key(runtime, monkeypatch):
+    """Carrying z.ai's key across to OpenAI would be nonsense."""
+    from dataclasses import replace
+
+    runtime.config = runtime.config.with_overrides(
+        provider=replace(runtime.config.provider, name="zai", api_key="zai-secret")
+    )
+    seen: dict = {}
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: seen.update(key=config.api_key) or FakeProvider(name=config.name),
+    )
+    backends.use(runtime, "openai", persist=False)
+    assert seen["key"] == ""
+
+
+def test_a_key_is_verified_against_that_backend_alone(runtime, monkeypatch):
+    """With failover on, a standby would answer and any key would look valid."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: seen.setdefault("fallback", config.fallback) or FakeProvider(
+            name=config.name, model="m"
+        ),
+    )
+    backends.set_key(runtime, "openrouter", "sk-or-v1-x", persist=False)
+    assert seen["fallback"] == (), "verification must not be answerable by a standby"

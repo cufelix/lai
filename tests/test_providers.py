@@ -319,3 +319,18 @@ def test_explicit_config_beats_discovery(monkeypatch):
         assert provider.model == "explicit-model"
     finally:
         provider.close()
+
+
+def test_a_catalogued_vendor_gets_its_own_url_when_none_was_discovered(monkeypatch):
+    """Without this an OpenRouter key is posted to api.openai.com, which
+    answers 401 and makes a perfectly good key look wrong."""
+    from lai.agent.providers.registry import _instantiate
+    from lai.config import ProviderConfig
+
+    provider = _instantiate(
+        "openrouter",
+        ProviderConfig(name="openrouter", api_key="sk-or-v1-x", base_url=""),
+        None,
+    )
+    assert "openrouter.ai" in provider.base_url
+    provider.close()

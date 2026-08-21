@@ -231,8 +231,10 @@ def check(name: str, *, model: str = "", timeout: float = 120.0) -> tuple[bool, 
 
     provider = None
     try:
+        # No failover: this asks whether *this* backend works, and a chain
+        # would let a standby answer on its behalf.
         provider = build_provider(
-            ProviderConfig(name=name, model=model, max_tokens=16, timeout=timeout)
+            ProviderConfig(name=name, model=model, max_tokens=16, timeout=timeout, fallback=())
         )
         turn = provider.complete([Message.user("Say OK.")], system="Reply with one word.")
         text = (turn.text or "").strip()[:60]

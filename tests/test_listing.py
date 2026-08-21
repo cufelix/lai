@@ -194,3 +194,62 @@ def test_an_unknown_backend_is_a_lookup_error(monkeypatch):
     monkeypatch.setattr("lai.agent.providers.registry.discover_credentials", list)
     with pytest.raises(LookupError):
         endpoint_for("not-a-vendor")
+
+
+# -- offering something that can actually drive the agent ----------------
+
+CAPABILITIES = {
+    "data": [
+        {"id": "music/generator:free", "context_length": 1000000,
+         "pricing": {"prompt": "0"},
+         "supported_parameters": ["max_tokens", "temperature"],
+         "architecture": {"input_modalities": ["text", "image"]}},
+        {"id": "good/agent-model:free", "context_length": 200000,
+         "pricing": {"prompt": "0"},
+         "supported_parameters": ["tools", "tool_choice", "temperature"],
+         "architecture": {"input_modalities": ["text", "image"]}},
+        {"id": "text/only-tools", "context_length": 128000,
+         "pricing": {"prompt": "0.000001"},
+         "supported_parameters": ["tools"],
+         "architecture": {"input_modalities": ["text"]}},
+    ]
+}
+
+
+def test_a_model_that_cannot_call_tools_is_not_offered_first(fake_get):
+    """OpenRouter's cheapest entries include music and image generators, and
+    the person choosing has no way to know that from the name."""
+    fake_get(CAPABILITIES)
+    models = fetch("https://openrouter.ai/api/v1")
+    assert models[0].id == "good/agent-model:free"
+    assert models[-1].id == "music/generator:free"
+
+
+def test_tool_support_is_read_from_the_catalogue(fake_get):
+    fake_get(CAPABILITIES)
+    models = {m.id: m for m in fetch("https://x.test/v1")}
+    assert models["good/agent-model:free"].tools is True
+    assert models["music/generator:free"].tools is False
+    assert not models["music/generator:free"].usable
+
+
+def test_vision_is_read_too(fake_get):
+    fake_get(CAPABILITIES)
+    models = {m.id: m for m in fetch("https://x.test/v1")}
+    assert models["good/agent-model:free"].vision is True
+    assert models["text/only-tools"].vision is False
+
+
+def test_a_missing_capability_list_is_given_the_benefit_of_the_doubt(fake_get):
+    """Most local servers publish nothing; hiding every model on them would be
+    worse than occasionally offering one that turns out not to fit."""
+    fake_get({"data": [{"id": "local-model"}]})
+    model = fetch("https://x.test/v1")[0]
+    assert model.tools and model.vision and model.usable
+
+
+def test_the_description_warns_about_what_is_missing(fake_get):
+    fake_get(CAPABILITIES)
+    models = {m.id: m for m in fetch("https://x.test/v1")}
+    assert "no tool calling" in models["music/generator:free"].describe()
+    assert "no vision" in models["text/only-tools"].describe()

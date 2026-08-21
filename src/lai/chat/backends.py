@@ -8,6 +8,7 @@ backend picked in the terminal end up in exactly the same config file.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 
 from ..config import Config
@@ -57,7 +58,18 @@ def use(runtime, name: str, *, model: str = "", persist: bool = True) -> str:
     if not name:
         raise ProviderError("no backend named")
 
-    config = replace(runtime.config.provider, name=name, model=model, api_key="", base_url="")
+    # A key belongs to a backend. Carrying z.ai's key across to OpenAI would be
+    # nonsense, but dropping OpenRouter's while merely changing which OpenRouter
+    # model to use throws away the thing that just got verified.
+    same = (runtime.config.provider.name or "").strip().lower() == name.lower()
+    current = runtime.config.provider
+    config = replace(
+        current,
+        name=name,
+        model=model,
+        api_key=current.api_key if same else "",
+        base_url=current.base_url if same else "",
+    )
     provider = build_provider(config, home=runtime.config.home)
 
     previous = runtime.provider
@@ -109,10 +121,12 @@ def save(config: Config, updates: dict) -> None:
 
 
 def set_key(runtime, name: str, key: str, *, model: str = "", persist: bool = True) -> str:
-    """Save an API key for a vendor, after proving it works.
+    """Save an API key for a vendor, after proving that *this* vendor works.
 
-    Verified first, always: a key saved without being tried is a key you
-    discover is wrong on your next real task, when you least want to.
+    Verified against the named backend alone, with failover switched off. That
+    matters more than it sounds: a chain would happily let a standby answer,
+    and the key you just pasted would be reported as working when nothing had
+    tried it.
     """
     from dataclasses import replace as _replace  # noqa: PLC0415
 
@@ -125,23 +139,29 @@ def set_key(runtime, name: str, key: str, *, model: str = "", persist: bool = Tr
 
     candidate = _replace(
         runtime.config.provider, name=name, model=model, api_key=key,
-        base_url="", max_tokens=16,
+        base_url="", max_tokens=16, fallback=(),
     )
     provider = build_provider(candidate)
     try:
         turn = provider.complete([Message.user("Say OK.")], system="Reply with one word.")
-        answered = (turn.text or "").strip()[:40]
+        answered = " ".join((turn.text or "").split())[:40]
         resolved = provider.model
     finally:
-        try:
+        with contextlib.suppress(Exception):
             provider.close()
-        except Exception:
-            pass
 
-    use(runtime, name, model=model or resolved, persist=False)
-    runtime.config = runtime.config.with_overrides(
-        provider=_replace(runtime.config.provider, api_key=key)
-    )
+    # It works, so it becomes the configuration — key included. Going through
+    # `use` would drop it: that path is for switching between backends whose
+    # keys already live in the environment.
+    settled = _replace(runtime.config.provider, name=name, model=model or resolved, api_key=key)
+    previous = runtime.provider
+    runtime.config = runtime.config.with_overrides(provider=settled)
+    runtime.provider = build_provider(settled, home=runtime.config.home)
+    runtime.provider_error = ""
+    if previous is not None and previous is not runtime.provider:
+        with contextlib.suppress(Exception):
+            previous.close()
+
     if persist:
         save(runtime.config, {"provider": {"name": name, "model": model or resolved, "api_key": key}})
     return f"{name}/{resolved}" + (f" replied {answered!r}" if answered else "")

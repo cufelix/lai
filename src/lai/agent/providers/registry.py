@@ -307,6 +307,15 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
         if name == "ollama":
             base_url = base_url or OLLAMA_BASE_URL
             api_key = api_key or "ollama"
+        # Without this the URL falls through to the OpenAI default, and an
+        # OpenRouter key gets posted to api.openai.com — which answers 401 and
+        # makes a perfectly good key look wrong. Only reached when no
+        # credential was discovered, i.e. exactly when somebody is adding one.
+        if not base_url:
+            from .catalog import get as get_vendor  # noqa: PLC0415
+
+            known = get_vendor(name)
+            base_url = known.url() if known is not None else ""
         if not api_key:
             raise ProviderError(f"{name}: no API key configured")
         return OpenAIProvider(

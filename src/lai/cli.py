@@ -81,12 +81,28 @@ class Out:
     def write(self, text: str = "", *, style: str = "") -> None:
         if self.quiet:
             return
-        if self._console is not None and style:
-            self._console.print(text, style=style)
-        elif self._console is not None:
-            self._console.print(text)
-        else:
-            print(_strip_markup(text))
+        try:
+            if self._console is not None and style:
+                self._console.print(text, style=style)
+            elif self._console is not None:
+                self._console.print(text)
+            else:
+                print(_strip_markup(text))
+        except UnicodeEncodeError:
+            # A terminal that cannot render a checkmark is a cosmetic problem;
+            # losing the message it was attached to is not. Seen for real: a
+            # tool's ✓ came back through a model's reply and took down the
+            # whole key-setup flow with an encoding error.
+            self._plainly(text)
+
+    def _plainly(self, text: str) -> None:
+        """Last resort: whatever this terminal can actually encode."""
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        body = _strip_markup(text).encode(encoding, errors="replace").decode(encoding)
+        try:
+            print(body)
+        except Exception:
+            pass
 
     def raw(self, text: str) -> None:
         if self.quiet:

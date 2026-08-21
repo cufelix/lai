@@ -33,6 +33,16 @@ class ModelInfo:
     prompt_price: float = -1.0
     """Cost per million prompt tokens; -1 when the endpoint does not say."""
     free: bool = False
+    tools: bool = True
+    """Whether it can call tools. An agent without that is not an agent at all,
+    so this decides the order more than price does — and endpoints that decline
+    to say are given the benefit of the doubt rather than hidden."""
+    vision: bool = True
+
+    @property
+    def usable(self) -> bool:
+        """Could this actually drive the agent?"""
+        return self.tools
 
     def describe(self) -> str:
         parts = []
@@ -42,6 +52,10 @@ class ModelInfo:
             parts.append("free")
         elif self.prompt_price >= 0:
             parts.append(f"${self.prompt_price:g}/M in")
+        if not self.tools:
+            parts.append("no tool calling")
+        elif not self.vision:
+            parts.append("no vision")
         return " · ".join(parts)
 
     def to_dict(self) -> dict:
@@ -121,16 +135,40 @@ def _parse(entry) -> ModelInfo | None:
         free = price == 0
     free = free or identifier.endswith(":free")
 
+    parameters = entry.get("supported_parameters")
+    # Absent means the endpoint does not publish capabilities — most local
+    # servers — and refusing to offer those would hide every model on them.
+    tools = "tools" in parameters if isinstance(parameters, list) else True
+
+    architecture = entry.get("architecture")
+    modalities = architecture.get("input_modalities") if isinstance(architecture, dict) else None
+    vision = "image" in modalities if isinstance(modalities, list) else True
+
     return ModelInfo(
         id=identifier,
         label=str(entry.get("name") or "").strip(),
         context=int(context or 0),
         prompt_price=price,
         free=free,
+        tools=tools,
+        vision=vision,
     )
 
 
 def _rank(model: ModelInfo) -> tuple:
-    """Free first, then cheap, then roomy — and stable by id after that."""
+    """What to offer first.
+
+    Capability before price, because a free model that cannot call tools makes
+    a useless agent and the person choosing has no way to know that from the
+    name — OpenRouter's cheapest entries include music and image generators.
+    Then vision, then free, then cheap, then roomy.
+    """
     price = model.prompt_price if model.prompt_price >= 0 else float("inf")
-    return (0 if model.free else 1, price, -model.context, model.id)
+    return (
+        0 if model.tools else 1,
+        0 if model.vision else 1,
+        0 if model.free else 1,
+        price,
+        -model.context,
+        model.id,
+    )

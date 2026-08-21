@@ -63,7 +63,14 @@ class Reader:
         )
 
     def secret(self, prompt: str) -> str:
-        """Read something that must not appear on screen or in the history."""
+        """Read something that must not appear on screen or in the history.
+
+        On a session of its own, deliberately. Asking the main session to hide
+        one answer leaves it hiding every answer if anything goes wrong in
+        between — which is how a failed key paste turned the whole
+        conversation into rows of asterisks. A separate session cannot leak
+        that state, and its history is never written anywhere.
+        """
         if self.session is None:
             import getpass  # noqa: PLC0415
 
@@ -72,9 +79,21 @@ class Reader:
             except (EOFError, KeyboardInterrupt):
                 return ""
         try:
-            return self.session.prompt(_plain(prompt), is_password=True)
+            from prompt_toolkit import PromptSession  # noqa: PLC0415
+            from prompt_toolkit.history import InMemoryHistory  # noqa: PLC0415
+
+            return PromptSession(history=InMemoryHistory()).prompt(
+                _plain(prompt), is_password=True
+            )
         except (EOFError, KeyboardInterrupt):
             return ""
+        except Exception:
+            import getpass  # noqa: PLC0415
+
+            try:
+                return getpass.getpass(_plain(prompt))
+            except (EOFError, KeyboardInterrupt):
+                return ""
 
     def read(self, prompt: str, *, bottom: str = "") -> str:
         if self.session is None:
