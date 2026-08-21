@@ -24,14 +24,98 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Input, Label, RichLog, Static
+from textual.widgets import Button, Footer, Input, Label, OptionList, RichLog, Static, TextArea
 
 from ..agent.session import Session
 from ..config import PERMISSION_MODES
+from .palette import Palette, line_prefix, search
 
 REFRESH_INTERVAL = 2.0
+
+
+@dataclass(slots=True)
+class PendingAnswer:
+    """A question the UI must answer while a worker thread waits for it.
+
+    The same inversion the approval prompt uses: the worker blocks on an event
+    while the interface shows a dialog. Slash commands need it too — choosing a
+    backend or pasting a key are questions, and they arrive from a thread.
+    """
+
+    question: str
+    options: tuple = ()
+    kind: str = "choice"
+    """choice | confirm | secret"""
+    event: threading.Event = field(default_factory=threading.Event)
+    value: object = None
+
+
+class ChoiceScreen(ModalScreen[int]):
+    """Pick one of a numbered list — the same shape the chat menu has."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, pending: PendingAnswer) -> None:
+        super().__init__()
+        self.pending = pending
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="choice-box"):
+            yield Label(self.pending.question, id="choice-title")
+            yield OptionList(*[str(option) for option in self.pending.options], id="choice-list")
+            yield Label("enter to choose · esc to cancel", classes="panel-title")
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).focus()
+
+    @on(OptionList.OptionSelected)
+    def _chosen(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option_index)
+
+    def action_cancel(self) -> None:
+        self.dismiss(-1)
+
+
+class AskScreen(ModalScreen[str]):
+    """A yes/no question, or something typed that must not be echoed."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, pending: PendingAnswer) -> None:
+        super().__init__()
+        self.pending = pending
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="ask-box"):
+            yield Label(self.pending.question, id="ask-title")
+            if self.pending.kind == "secret":
+                yield Input(password=True, id="ask-input", placeholder="paste here — not echoed")
+            else:
+                with Horizontal(id="ask-buttons"):
+                    yield Button("Yes  (y)", variant="success", id="yes")
+                    yield Button("No  (n)", variant="error", id="no")
+
+    def on_mount(self) -> None:
+        if self.pending.kind == "secret":
+            self.query_one(Input).focus()
+
+    @on(Input.Submitted)
+    def _typed(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    @on(Button.Pressed, "#yes")
+    def _yes(self) -> None:
+        self.dismiss("yes")
+
+    @on(Button.Pressed, "#no")
+    def _no(self) -> None:
+        self.dismiss("")
+
+    def action_cancel(self) -> None:
+        self.dismiss("")
 
 
 @dataclass(slots=True)
@@ -82,13 +166,84 @@ class ApprovalScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class Composer(TextArea):
+    """Where you type. Multiline, because tasks are often a paragraph.
+
+    Enter sends and Shift+Enter breaks the line — the opposite of a text
+    editor's default, and the right way round for something you talk to.
+
+    While the command palette is open the arrow keys and Enter belong to it:
+    you are choosing a command, not writing one.
+    """
+
+    BINDINGS = [Binding("escape", "app.focus_feed", "Back", show=False)]
+
+    class Submitted(Message):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
+    class Completed(Message):
+        """A command was picked out of the palette."""
+
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.name = name
+
+    def _palette(self):
+        try:
+            palette = self.app.query_one(Palette)
+        except Exception:
+            return None
+        return palette if palette.open else None
+
+    async def _on_key(self, event) -> None:
+        palette = self._palette()
+        if palette is not None:
+            if event.key in ("down", "up"):
+                event.prevent_default()
+                event.stop()
+                palette.action_cursor_down() if event.key == "down" else palette.action_cursor_up()
+                return
+            if event.key in ("enter", "tab"):
+                event.prevent_default()
+                event.stop()
+                name = palette.chosen()
+                if name:
+                    self.post_message(self.Completed(name))
+                return
+            if event.key == "escape":
+                event.prevent_default()
+                event.stop()
+                palette.close()
+                return
+
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            if text:
+                self.post_message(self.Submitted(text))
+                self.clear()
+            return
+        if event.key == "shift+enter":
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
+            return
+        await super()._on_key(event)
+
+
 class StatusBar(Static):
     """Top line: who is answering, under what permissions, and at what cost."""
 
     provider = reactive("")
     mode = reactive("ask")
     steps = reactive(0)
+    of_steps = reactive(0)
     tokens = reactive(0)
+    context = reactive(0)
+    context_budget = reactive(0)
     elapsed = reactive(0.0)
     busy = reactive(False)
 
@@ -101,11 +256,18 @@ class StatusBar(Static):
         }.get(self.mode, "white")
         text.append(f" {self.mode} ", style=mode_style)
         if self.busy:
-            text.append(f" step {self.steps} ", style="bold")
+            of = f"/{self.of_steps}" if self.of_steps else ""
+            text.append(f" step {self.steps}{of} ", style="bold")
             text.append(f" {self.elapsed:.0f}s ", style="dim")
         else:
             text.append(" idle ", style="dim")
         text.append(f" {self.tokens:,} tok ", style="dim")
+        if self.context_budget:
+            # How full the transcript is. Amber from three-quarters, because
+            # that is where compaction starts costing a round trip.
+            share = min(self.context / self.context_budget, 1.0)
+            style = "red" if share >= 0.95 else "yellow" if share >= 0.75 else "dim"
+            text.append(f" ctx {share * 100:.0f}% ", style=style)
         return text
 
 
@@ -183,7 +345,16 @@ class LaiApp(App):
     #plan-box { height: 1fr; }
     #desktop-box { height: 2fr; }
     .panel-title { color: $text-muted; text-style: bold; }
-    #prompt { dock: bottom; height: 3; border: tall $accent; }
+    #input-area { dock: bottom; height: auto; }
+    #prompt { height: auto; min-height: 3; max-height: 12; border: tall $accent; }
+    #choice-box, #ask-box {
+        width: 78; height: auto; max-height: 24; padding: 1 2;
+        background: $surface; border: thick $accent;
+    }
+    #choice-title, #ask-title { color: $accent; text-style: bold; margin-bottom: 1; }
+    #choice-list { height: auto; max-height: 16; }
+    #ask-buttons { height: auto; margin-top: 1; }
+    #ask-buttons Button { margin-right: 2; }
     #approval-box {
         width: 70; height: auto; padding: 1 2;
         background: $surface; border: thick $warning;
@@ -199,6 +370,8 @@ class LaiApp(App):
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+n", "new_session", "New session"),
+        Binding("ctrl+r", "pick_session", "Resume"),
+        Binding("ctrl+p", "command_palette", "Commands", priority=True),
         Binding("f2", "cycle_mode", "Cycle mode"),
         Binding("f5", "observe", "Observe"),
     ]
@@ -226,7 +399,9 @@ class LaiApp(App):
                 with VerticalScroll(id="desktop-box"):
                     yield Label("DESKTOP", classes="panel-title")
                     yield DesktopPanel(id="desktop")
-        yield Input(placeholder="Tell me what to do on this desktop…", id="prompt")
+        with Vertical(id="input-area"):
+            yield Palette(id="palette")
+            yield Composer(id="prompt", soft_wrap=True, show_line_numbers=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -240,7 +415,7 @@ class LaiApp(App):
         bar.mode = self.runtime.config.safety.mode
 
         self._welcome()
-        self.query_one(Input).focus()
+        self.query_one(Composer).focus()
         self.set_interval(0.5, self._tick)
 
         if self.initial_task:
@@ -285,12 +460,39 @@ class LaiApp(App):
 
     # -- running ---------------------------------------------------------
 
-    @on(Input.Submitted, "#prompt")
-    def _on_submit(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
-        event.input.value = ""
-        if text:
-            self.submit(text)
+    @on(Composer.Submitted)
+    def _on_submit(self, event: Composer.Submitted) -> None:
+        self.query_one(Palette).close()
+        self.submit(event.text)
+
+    @on(Composer.Changed)
+    def _on_typed(self) -> None:
+        """Open the palette on `/`, narrow it as the name is typed, close after."""
+        composer = self.query_one(Composer)
+        palette = self.query_one(Palette)
+        prefix = line_prefix(composer.text)
+        if prefix is None:
+            palette.close()
+            return
+        palette.show(search(prefix))
+
+    @on(Composer.Completed)
+    def _on_completed(self, event: Composer.Completed) -> None:
+        """Finish the word and hand the line back — no command runs by itself."""
+        composer = self.query_one(Composer)
+        rest = composer.text.split("\n", 1)
+        tail = f"\n{rest[1]}" if len(rest) > 1 else ""
+        self.query_one(Palette).close()
+        composer.text = f"/{event.name} {tail}".rstrip() + (" " if not tail else "")
+        composer.move_cursor(composer.document.end)
+        composer.focus()
+
+    @on(Palette.OptionSelected)
+    def _palette_clicked(self, event: Palette.OptionSelected) -> None:
+        self.post_message(Composer.Completed(str(event.option.id or "")))
+
+    def action_focus_feed(self) -> None:
+        self.query_one("#feed", RichLog).focus()
 
     def submit(self, text: str) -> None:
         if self.query_one(StatusBar).busy:
@@ -335,6 +537,9 @@ class LaiApp(App):
         bar = self.query_one(StatusBar)
         if kind == "step":
             bar.steps = payload.get("step", 0)
+            bar.of_steps = int(payload.get("of") or 0)
+            bar.context = int(payload.get("context") or 0)
+            bar.context_budget = int(payload.get("context_budget") or 0)
         elif kind == "text":
             delta = payload.get("delta", "")
             if delta:
@@ -454,6 +659,41 @@ class LaiApp(App):
         self.query_one(StatusBar).mode = mode
         self.write(f"[dim]permission mode → {mode}[/dim]")
 
+    def action_command_palette(self) -> None:
+        """Ctrl+P is the muscle memory; it just starts the line for you."""
+        composer = self.query_one(Composer)
+        composer.focus()
+        if line_prefix(composer.text) is None:
+            composer.text = "/"
+            composer.move_cursor(composer.document.end)
+        self.query_one(Palette).show(search(""))
+
+    def action_pick_session(self) -> None:
+        """Recent conversations, newest first — the list `/sessions` prints,
+        except you can choose from it instead of copying an id."""
+        # An empty transcript — this session, or one abandoned at the prompt —
+        # has no task line and cannot be resumed, so it does not belong in a
+        # list of things to resume.
+        listing = [
+            entry for entry in Session.list_sessions(self.runtime.config.sessions_dir, limit=30)
+            if (entry.get("task") or "").strip() and entry["id"] != self.session.id
+        ][:15]
+        if not listing:
+            self.write("[dim]no past sessions yet[/dim]")
+            return
+        labels = [
+            f"{time.strftime('%d %b %H:%M', time.localtime(entry['modified']))}  {entry['task'][:70]}"
+            for entry in listing
+        ]
+        pending = PendingAnswer(question="Resume which conversation?", options=tuple(labels))
+
+        def chosen(index: int | None) -> None:
+            if index is None or index < 0:
+                return
+            self._resume(listing[index]["id"])
+
+        self.push_screen(ChoiceScreen(pending), chosen)
+
     def action_observe(self) -> None:
         try:
             observation = self.runtime.desktop.observe(screenshot=False)
@@ -464,52 +704,80 @@ class LaiApp(App):
 
     # -- slash commands --------------------------------------------------
 
+    @work(thread=True)
     def _slash(self, line: str) -> None:
-        command, _, rest = line[1:].partition(" ")
-        command = command.lower()
-        if command in ("quit", "q", "exit"):
-            self.exit()
-        elif command == "new":
-            self.action_new_session()
-        elif command == "observe":
-            self.action_observe()
-        elif command == "mode":
-            mode = rest.strip()
-            if mode in PERMISSION_MODES:
-                from dataclasses import replace  # noqa: PLC0415
+        """Run a slash command on a worker, so its questions can use modals.
 
-                self.runtime.config = self.runtime.config.with_overrides(
-                    safety=replace(self.runtime.config.safety, mode=mode)
-                )
-                self.runtime.policy.config = self.runtime.config.safety
-                self.query_one(StatusBar).mode = mode
-                self.write(f"[dim]permission mode → {mode}[/dim]")
-            else:
-                self.write(f"[red]mode must be one of {', '.join(PERMISSION_MODES)}[/red]")
-        elif command == "tools":
-            specs = self.runtime.registry.specs()
-            if rest.strip():
-                specs = [s for s in specs if rest.strip().lower() in s.name.lower()]
-            for spec in specs[:60]:
-                self.write(f"  [cyan]{spec.name}[/cyan] [dim]({spec.risk.value})[/dim] {spec.description[:70]}")
-            self.write(f"[dim]{len(specs)} tool(s)[/dim]")
-        elif command == "skills":
-            found = self.runtime.skills.search(rest.strip()) if rest.strip() else self.runtime.skills.list()
-            for skill in found[:40]:
-                self.write(f"  [green]{skill.name}[/green] [dim]{skill.description[:70]}[/dim]")
-            self.write(f"[dim]{len(found)} skill(s)[/dim]")
-        elif command == "session":
-            self.write(str(self.session.summary()))
-        elif command in ("help", "h", "?"):
-            self.write(
-                "[bold]/help /quit /new /observe /mode <m> /tools [filter] /skills [q] /session[/bold]\n"
-                "[dim]ctrl+c interrupt · f2 cycle mode · f5 observe · ctrl+n new session[/dim]"
-            )
-            self.write("[bold]Example tasks:[/bold]")
-            for example in EXAMPLE_TASKS:
-                self.write(f"  [cyan]{example}[/cyan]")
-        else:
-            self.write(f"[red]unknown command /{command}[/red] — try /help")
+        The same table the chat uses. Keeping a second, smaller one here is how
+        the full-screen interface ended up less capable than the plain one —
+        you could switch backend from `lai chat` and not from `lai tui`.
+        """
+        from ..chat.commands import NEW, QUIT, RESUME, Context, run  # noqa: PLC0415
+
+        context = Context(
+            runtime=self.runtime,
+            ask=self._ask_choice,
+            secret=self._ask_secret,
+            confirm=self._ask_confirm,
+            say=lambda text: self.call_from_thread(self.write, text),
+        )
+        try:
+            answer = run(context, line)
+        except Exception as exc:
+            self.call_from_thread(self.write, f"[red]{type(exc).__name__}: {exc}[/red]")
+            return
+
+        if answer == QUIT:
+            self.call_from_thread(self.exit)
+        elif answer == NEW:
+            self.call_from_thread(self.action_new_session)
+        elif answer.startswith(RESUME):
+            self.call_from_thread(self._resume, answer[len(RESUME):])
+        elif answer:
+            self.call_from_thread(self.write, answer)
+        self.call_from_thread(self._refresh_status)
+
+    def _resume(self, wanted: str) -> None:
+        from ..chat.session_pick import resume as pick  # noqa: PLC0415
+
+        found, why = pick(self.runtime.config.sessions_dir, wanted)
+        if found is None:
+            self.write(f"[yellow]{why}[/yellow]")
+            return
+        self.session = found
+        self.write(f"[green]↺ {why}[/green]")
+
+    def _refresh_status(self) -> None:
+        """A command may have changed the backend or the mode."""
+        bar = self.query_one(StatusBar)
+        provider = self.runtime.provider
+        bar.provider = f"{provider.name}/{provider.model}" if provider else "no model"
+        bar.mode = self.runtime.config.safety.mode
+
+    # -- questions from a worker thread ----------------------------------
+
+    def _answer(self, pending: PendingAnswer, screen) -> object:
+        """Show a modal and block the calling worker until it is answered."""
+        def answered(value) -> None:
+            pending.value = value
+            pending.event.set()
+
+        self.call_from_thread(self.push_screen, screen, answered)
+        pending.event.wait(timeout=600)
+        return pending.value
+
+    def _ask_choice(self, question: str, options: list) -> int:
+        pending = PendingAnswer(question=question, options=tuple(options), kind="choice")
+        value = self._answer(pending, ChoiceScreen(pending))
+        return int(value) if isinstance(value, int) else -1
+
+    def _ask_secret(self, question: str) -> str:
+        pending = PendingAnswer(question=question, kind="secret")
+        return str(self._answer(pending, AskScreen(pending)) or "")
+
+    def _ask_confirm(self, question: str) -> bool:
+        pending = PendingAnswer(question=question, kind="confirm")
+        return bool(self._answer(pending, AskScreen(pending)))
 
 
 def run_tui(runtime, *, task: str = "") -> None:

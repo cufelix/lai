@@ -443,12 +443,199 @@ async def test_without_a_backend_it_points_at_setup(runtime):
         assert "Try asking for" not in text, "do not suggest tasks that cannot run"
 
 
-async def test_help_repeats_the_examples(runtime):
+async def test_help_lists_the_same_commands_the_chat_has(runtime):
+    """The full-screen interface used to carry its own, smaller command table,
+    which is how it ended up less capable than the plain one."""
+    from lai.chat.commands import COMMANDS
+
     app = LaiApp(runtime)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         app._slash("/help")
-        await pilot.pause()
+        for _ in range(20):
+            await pilot.pause()
+            if "/model" in feed_text(app):
+                break
         text = feed_text(app)
-        assert "Example tasks" in text
-        assert "/mode" in text
+        assert "/model" in text and "/notes" in text
+        assert sum(f"/{name}" in text for name, spec in COMMANDS.items() if not spec[2]) > 10
+
+
+# -- the command palette -------------------------------------------------
+
+
+def test_palette_offers_every_visible_command():
+    from lai.chat.commands import COMMANDS
+    from lai.tui.palette import search, visible_commands
+
+    assert len(visible_commands()) == sum(1 for spec in COMMANDS.values() if not spec[2])
+    assert search("") == visible_commands()
+
+
+def test_palette_prefers_a_prefix_then_falls_back_to_scattered_letters():
+    from lai.tui.palette import search
+
+    table = [("model", "a"), ("models", "b"), ("mode", "c"), ("notes", "d")]
+    assert [n for n, _ in search("mod", table)] == ["model", "models", "mode"]
+    # `mdl` is nobody's prefix, but the letters are in order in `model`.
+    assert [n for n, _ in search("mdl", table)] == ["model", "models"]
+    assert search("zzz", table) == []
+
+
+def test_only_the_first_word_of_the_first_line_is_a_command():
+    from lai.tui.palette import line_prefix
+
+    assert line_prefix("/mod") == "mod"
+    assert line_prefix("/") == ""
+    assert line_prefix("/model openrouter") is None, "that is an argument now"
+    assert line_prefix("open firefox") is None
+    assert line_prefix("hi\n/model") is None
+
+
+async def test_typing_a_slash_opens_the_palette_and_enter_completes(runtime):
+    from lai.tui.app import Composer
+    from lai.tui.palette import Palette
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        composer, palette = app.query_one(Composer), app.query_one(Palette)
+        composer.focus()
+        composer.text = "/mo"
+        await pilot.pause()
+        await pilot.pause()
+        assert palette.open and palette.chosen() == "model"
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert composer.text == "/model "
+        assert not palette.open, "completing a name must not run the command"
+
+
+async def test_the_palette_sits_above_the_composer_not_over_it(runtime):
+    from lai.tui.app import Composer
+    from lai.tui.palette import Palette
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        composer, palette = app.query_one(Composer), app.query_one(Palette)
+        composer.focus()
+        composer.text = "/"
+        await pilot.pause()
+        await pilot.pause()
+        assert palette.open
+        assert palette.region.bottom <= composer.region.y
+
+
+async def test_a_plain_task_leaves_the_palette_shut(runtime):
+    from lai.tui.app import Composer
+    from lai.tui.palette import Palette
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.text = "open firefox"
+        await pilot.pause()
+        assert not app.query_one(Palette).open
+
+
+async def test_escape_shuts_the_palette_without_clearing_the_line(runtime):
+    from lai.tui.app import Composer
+    from lai.tui.palette import Palette
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        composer = app.query_one(Composer)
+        composer.focus()
+        composer.text = "/mo"
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.query_one(Palette).open
+        assert composer.text == "/mo"
+
+
+async def test_ctrl_p_starts_a_command_for_you(runtime):
+    from lai.tui.app import Composer
+    from lai.tui.palette import Palette
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.action_command_palette()
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one(Composer).text == "/"
+        assert app.query_one(Palette).open
+
+
+# -- resuming ------------------------------------------------------------
+
+
+async def test_the_session_picker_says_so_when_there_is_nothing_to_resume(runtime, monkeypatch):
+    from lai.agent.session import Session
+
+    monkeypatch.setattr(Session, "list_sessions", classmethod(lambda cls, d, limit=20: []))
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.action_pick_session()
+        await pilot.pause()
+        assert "no past sessions" in feed_text(app)
+
+
+async def test_the_session_picker_lists_and_resumes(runtime):
+    from lai.agent.providers.base import Message
+    from lai.agent.session import Session
+
+    earlier = Session()
+    earlier.task = "open the calculator"
+    earlier.bind(runtime.config.sessions_dir)
+    earlier.append(Message.user("open the calculator"))
+
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.action_pick_session()
+        await pilot.pause()
+        from lai.tui.app import ChoiceScreen
+
+        screen = app.screen
+        assert isinstance(screen, ChoiceScreen)
+        labels = [str(option) for option in screen.pending.options]
+        index = next(i for i, label in enumerate(labels) if "open the calculator" in label)
+        screen.dismiss(index)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.session.id == earlier.id
+
+
+# -- context pressure ----------------------------------------------------
+
+
+async def test_the_status_bar_shows_how_full_the_context_is(runtime):
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._event("step", {"step": 2, "of": 60, "context": 9000, "context_budget": 10000})
+        await pilot.pause()
+        bar = app.query_one(StatusBar)
+        bar.busy = True
+        rendered = bar.render().plain
+        assert "step 2/60" in rendered
+        assert "ctx 90%" in rendered
+
+
+async def test_no_context_figures_means_no_gauge(runtime):
+    app = LaiApp(runtime)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._event("step", {"step": 1, "of": 5})
+        await pilot.pause()
+        assert "ctx" not in app.query_one(StatusBar).render().plain

@@ -211,7 +211,14 @@ class Agent:
                     break
 
                 self.session.steps = step
-                self._emit("step", {"step": step, "of": budget_steps})
+                # The context figures ride along with the step: an interface
+                # that can show how close the transcript is to compacting lets
+                # someone decide to split a task before the agent has to.
+                self._emit("step", {
+                    "step": step, "of": budget_steps,
+                    "context": self.session.estimate_tokens(),
+                    "context_budget": self._context_budget(),
+                })
                 self._maybe_compact()
 
                 try:

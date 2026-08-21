@@ -646,9 +646,17 @@
         markdown(streamBuffer, streamBuffer.dataset.raw);
         feed.scrollTop = feed.scrollHeight;
         break;
-      case "step":
-        $("runstate").textContent = `step ${event.step}/${event.of}`;
+      case "step": {
+        // The context share is only shown once it matters: a chip that reads
+        // "12%" all run teaches nothing, one that turns amber at 80% does.
+        const share = event.context_budget
+          ? Math.round((event.context / event.context_budget) * 100) : 0;
+        const ctx = share >= 60 ? ` · ctx ${share}%` : "";
+        const chip = $("runstate");
+        chip.textContent = `step ${event.step}/${event.of}${ctx}`;
+        chip.classList.toggle("warn", share >= 80);
         break;
+      }
       case "tool_call":
         streamBuffer = null;
         setTool(toolRow(event.name, JSON.stringify(event.input || {}).slice(0, 120)));
