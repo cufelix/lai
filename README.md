@@ -357,6 +357,40 @@ Permission prompts appear as a modal where you are already looking — `y` allow
 Useful flags on `do` / `chat` / `tui`: `--mode`, `--model`, `--provider`,
 `--steps`, `--timeout`, `--dry-run`, `--json`, `--verbose`.
 
+### It arrives knowing things
+
+An agent that starts every task from nothing repeats solved problems,
+re-derives facts it was told, and cannot answer *"carry on with what we were
+doing"*. Before a run begins, LAI gathers three different kinds of knowing:
+
+| | |
+|---|---|
+| **Notes** | how *this machine* behaves, learned by working on it — markdown you can correct |
+| **Memory** | what it was *told* to remember: preferences, decisions, keyed facts |
+| **Recently** | what was happening lately, so "carry on" has a referent |
+
+```
+## What you have learned on this machine
+### Top panel reserves 64px of vertical space
+- Maximized windows start at y=64 …
+
+## Memory
+- [preference] the user prefers windows tiled to the left half
+
+## Recently on this machine
+- 1 min ago: How many windows are open on this desktop right now?
+```
+
+All of it ranked against the task and capped at 4,000 characters — the point
+is to spend *fewer* tokens, so a recall block that crowded out the task would
+be a loss dressed as a feature. Every source fails soft: a broken database
+costs its section, never the run.
+
+**Compaction is when facts move out.** A summary put back into the transcript
+survives until the next compaction and then goes too, so anything that will
+still be true tomorrow is written to the journal before the conversation is
+dropped.
+
 ### It learns this machine
 
 An agent that rediscovers your desktop every run wastes most of its steps on
@@ -460,6 +494,17 @@ An *explicitly configured* backend is always tried anyway — being wrong about 
 recovery time must cost a retry, never an outage.
 
 `/fallback off` or `LAI_FALLBACK=off` turns it off.
+
+**Never using a particular backend** is a setting, not a matter of avoiding it:
+
+```toml
+[provider]
+deny = ["cli:claude", "anthropic"]
+```
+
+A denied backend is not auto-detected, not fallen back to, not listed and not
+offered in a menu — and asking for one explicitly is an error rather than a
+silent substitution. `LAI_DENY=anthropic` does the same for one run.
 
 ### It gets out of your way
 
