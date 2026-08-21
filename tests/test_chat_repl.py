@@ -185,11 +185,13 @@ def test_ctrl_c_at_the_prompt_says_how_to_leave(tmp_path, monkeypatch):
     assert "ctrl+d" in out.text
 
 
-def test_with_no_backend_it_refuses_before_asking_anything(tmp_path, monkeypatch):
+def test_with_no_backend_it_says_so_before_asking_anything(tmp_path, monkeypatch):
+    """It used to exit here. Exiting sends you to the same advice from a place
+    where you cannot act on it."""
     scripted(monkeypatch, "a task")
     out = FakeOut()
-    assert run_chat(FakeRuntime(tmp_path, provider=False), out=out) == 2
-    assert "lai setup" in out.text
+    assert run_chat(FakeRuntime(tmp_path, provider=False), out=out) == 0
+    assert "No model yet" in out.text and "/model" in out.text
 
 
 # -- slash commands ------------------------------------------------------
@@ -259,3 +261,40 @@ def test_the_welcome_names_the_backend_and_the_standbys(tmp_path, monkeypatch):
 def test_the_status_line_survives_a_provider_without_a_chain(tmp_path):
     runtime = FakeRuntime(tmp_path)
     assert "zai/glm-5" in status_line(runtime)
+
+
+# -- starting with nothing configured ------------------------------------
+
+
+def test_with_no_backend_the_chat_still_opens(tmp_path, monkeypatch):
+    """`/model` is how this gets fixed, and you cannot reach it from a command
+    that exited."""
+    scripted(monkeypatch, "/help")
+    out = FakeOut()
+    assert run_chat(FakeRuntime(tmp_path, provider=False), out=out) == 0
+    assert "/model" in out.text
+    assert "No model yet" in out.text
+
+
+def test_a_task_without_a_backend_points_at_the_menu(tmp_path, monkeypatch):
+    agent = FakeAgent()
+    scripted(monkeypatch, "open the editor")
+    out = FakeOut()
+    run_chat(FakeRuntime(tmp_path, agent, provider=False), out=out)
+    assert agent.tasks == [], "nothing is attempted without a model"
+    assert "/model" in out.text
+
+
+def test_the_menu_is_reachable_with_no_backend(tmp_path, monkeypatch):
+    """The whole point: the fix is one keystroke away, not a restart."""
+    from lai.chat.commands import COMMANDS
+
+    scripted(monkeypatch, "/model")
+    runtime = FakeRuntime(tmp_path, provider=False)
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        lambda rt=None, **kw: [],
+    )
+    out = FakeOut()
+    assert run_chat(runtime, out=out) == 0
+    assert "model" in COMMANDS

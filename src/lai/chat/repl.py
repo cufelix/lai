@@ -109,10 +109,6 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False, resume
     from ..cli import Out, _interactive_approver, _make_reporter  # noqa: PLC0415
 
     out = out or Out()
-    if runtime.provider is None:
-        from ..cli import _no_provider  # noqa: PLC0415
-
-        return _no_provider(out, runtime)
 
     reader = Reader(Path(runtime.config.home) / "history")
 
@@ -179,6 +175,14 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False, resume
                 out.write(answer)
             continue
 
+        if runtime.provider is None:
+            # The conversation is exactly where this gets fixed, so staying in
+            # it beats exiting with the same advice.
+            out.write(f"[red]No model backend:[/red] [dim]{runtime.provider_error}[/dim]")
+            out.write("[yellow]Pick one with [bold]/model[/bold][/yellow] "
+                      "[dim]— it lists what works and what needs a key[/dim]")
+            continue
+
         agent = runtime.agent(session=session, approver=approver, on_event=reporter)
         try:
             result = agent.run(line)
@@ -238,6 +242,16 @@ def _welcome(out, runtime) -> None:
 
     info = backends.describe(runtime)
     out.write(f"[bold]{BANNER}[/bold] [dim]v{__version__} — your desktop, driven[/dim]")
+
+    if runtime.provider is None:
+        # Starting anyway, because /model is how this gets fixed and you
+        # cannot reach it from a command that exited.
+        out.write(f"[red]No model yet:[/red] [dim]{runtime.provider_error}[/dim]")
+        out.write("")
+        out.write("[yellow]Type [bold]/model[/bold] to choose one.[/yellow] "
+                  "[dim]It lists what already works here, and what needs a key.[/dim]")
+        return
+
     out.write(
         f"[dim]{info['name']}/{info['model']} · mode {runtime.config.safety.mode} · "
         f"{len(runtime.registry)} tools · {len(runtime.skills)} skills[/dim]"
