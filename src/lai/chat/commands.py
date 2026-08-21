@@ -29,6 +29,12 @@ class Context:
     runtime: object
     ask: Callable[[str, list[str]], int] | None = None
     """Present a numbered choice; returns the index, or -1 for cancelled."""
+    secret: Callable[[str], str] | None = None
+    """Ask for something that must not be echoed — an API key."""
+    confirm: Callable[[str], bool] | None = None
+    """A yes/no question."""
+    say: Callable[[str], None] | None = None
+    """Print something mid-command, for a flow that takes several steps."""
 
 
 def cmd_help(ctx: Context, arg: str) -> str:
@@ -83,27 +89,105 @@ def _resting(runtime) -> dict:
         return {}
 
 
+# Backends worth offering to somebody who has not set one up. One key, many
+# models, and a signup page that takes a minute — which is the whole bar for
+# "could a person who just installed this get going in five minutes".
+SUGGESTED = ("openrouter", "openai", "anthropic", "gemini", "groq", "deepseek")
+
+
 def cmd_model(ctx: Context, arg: str) -> str:
-    """Switch backend. With no argument, offer a menu of what works."""
+    """Switch backend. With no argument, offer everything — including what is
+    not set up yet, because a choice you cannot see is a choice you do not have.
+    """
     runtime = ctx.runtime
     if arg.strip():
         target, _, model = arg.strip().partition(" ")
         return "[green]now using[/green] " + backends.use(runtime, target, model=model.strip())
 
-    found = [b for b in backends.catalogue(runtime) if b.status == "ready"]
-    if not found:
-        return "[yellow]No backend is ready. Run `lai setup`, or paste a key with /key.[/yellow]"
+    catalogue = backends.catalogue(runtime)
+    ready = [b for b in catalogue if b.status == "ready"]
+    addable = [b for b in catalogue if b.status != "ready" and b.name in SUGGESTED]
+    addable.sort(key=lambda b: SUGGESTED.index(b.name))
+
     if ctx.ask is None:
-        return "\n".join(f"  {b.name}  [dim]{b.model}[/dim]" for b in found)
+        lines = [f"  {b.name}  [dim]{b.model}[/dim]" for b in ready]
+        lines += [f"  [dim]+ {b.name} — needs a key[/dim]" for b in addable]
+        return "\n".join(lines) or "[yellow]No backend is ready. Run `lai setup`.[/yellow]"
 
     labels = [
         f"{b.name}  ({b.model or b.kind})  — " + (f"⏳ {b.resting}" if b.resting else b.detail)
-        for b in found
+        for b in ready
     ]
+    # A person choosing here has not set anything up, so the label has to read
+    # as an invitation rather than as the name of an environment variable.
+    labels += [f"+ {b.label or b.name} — add a key, takes a minute" for b in addable]
+    if not labels:
+        return "[yellow]No backend is ready. Run `lai setup`.[/yellow]"
+
     index = ctx.ask("Which backend should answer?", labels)
     if index < 0:
         return "[dim]unchanged[/dim]"
-    return "[green]now using[/green] " + backends.use(runtime, found[index].name)
+    if index < len(ready):
+        return "[green]now using[/green] " + backends.use(runtime, ready[index].name)
+    return _add_backend(ctx, addable[index - len(ready)])
+
+
+def _add_backend(ctx: Context, backend) -> str:
+    """Walk somebody through adding a backend they do not have yet.
+
+    Three steps, each of which can be abandoned: where to get a key, the key
+    itself, and which model to use. Nothing is written until the key has
+    answered a real request — being told "saved" and then failing on the first
+    task is the worst possible order for those two events.
+    """
+    say = ctx.say or (lambda text: None)
+    if ctx.secret is None:
+        return f"[dim]run `/key {backend.name} <your-key>` to add it[/dim]"
+
+    if backend.signup:
+        say(f"  Get a key here: [cyan]{backend.signup}[/cyan]")
+        if ctx.confirm is not None and ctx.confirm("  open that page in your browser?"):
+            _open_url(backend.signup)
+
+    key = ctx.secret(f"  Paste your {backend.name} key (it is not echoed): ")
+    if not key.strip():
+        return "[dim]nothing pasted — unchanged[/dim]"
+
+    say("  [dim]verifying…[/dim]")
+    try:
+        label = backends.set_key(ctx.runtime, backend.name, key.strip())
+    except Exception as exc:
+        return f"[red]that key did not work:[/red] [dim]{str(exc)[:200]}[/dim]"
+
+    say(f"[green]✓ {label}[/green]")
+    picked = _offer_models(ctx, backend.name)
+    return picked or f"[green]now using[/green] {label}"
+
+
+def _offer_models(ctx: Context, backend: str) -> str:
+    """Right after a key works, the next question is always which model."""
+    if ctx.ask is None or ctx.confirm is None:
+        return ""
+    try:
+        from ..models import available_models  # noqa: PLC0415
+
+        found = available_models(backend)
+    except Exception:
+        return ""
+    if len(found) < 2:
+        return ""
+    if not ctx.confirm(f"  {backend} serves {len(found)} models — pick one now?"):
+        return ""
+    return cmd_models(ctx, backend)
+
+
+def _open_url(url: str) -> None:
+    import webbrowser  # noqa: PLC0415
+
+    try:
+        webbrowser.open(url, new=2)
+    except Exception:
+        pass
 
 
 def cmd_models(ctx: Context, arg: str) -> str:

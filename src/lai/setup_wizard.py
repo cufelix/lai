@@ -329,8 +329,45 @@ def _setup_key(out, prompt: Prompt, answers: Answers, name: str) -> dict:
     else:
         out.write(f"  [green]✓ works[/green] [dim]{detail}[/dim]")
 
-    answers.provider, answers.model = name, model
-    return {"name": name, "api_key": key, "model": model}
+    chosen = _offer_models(out, prompt, name, key) if ok else ""
+    answers.provider, answers.model = name, chosen or model
+    return {"name": name, "api_key": key, "model": chosen or model}
+
+
+MODEL_MENU_LIMIT = 12
+
+
+def _offer_models(out, prompt: Prompt, name: str, key: str) -> str:
+    """Right after a key works, the obvious next question is which model.
+
+    Asked live, because a vendor's catalogue changes weekly and a default
+    baked into a table goes stale — and with hundreds on offer, picking for
+    somebody is worse than showing them the free one at the top.
+    """
+    if not prompt.interactive:
+        return ""
+    try:
+        from .agent.providers.listing import fetch  # noqa: PLC0415
+        from .models import endpoint_for  # noqa: PLC0415
+
+        base_url, existing = endpoint_for(name)
+        found = fetch(base_url, key or existing, timeout=8.0)
+    except Exception:
+        return ""  # a vendor that will not list its models is not a problem
+    if len(found) < 2:
+        return ""
+
+    if not prompt.confirm(f"  {name} serves {len(found)} models — choose one now?", default=True):
+        return ""
+
+    shown = found[:MODEL_MENU_LIMIT]
+    labels = [f"{m.id}" + (f"  ({m.describe()})" if m.describe() else "") for m in shown]
+    labels.append("keep the default")
+    index = prompt.choose("  Which model?", labels, default=0)
+    if index < 0 or index >= len(shown):
+        return ""
+    out.write(f"  [green]✓[/green] using [bold]{shown[index].id}[/bold]")
+    return shown[index].id
 
 
 def _setup_catalog(out, prompt: Prompt, answers: Answers) -> dict:

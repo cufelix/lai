@@ -684,3 +684,88 @@ def test_verify_key_spends_only_a_tiny_request(monkeypatch):
     monkeypatch.setattr("lai.agent.providers.registry._instantiate", capture)
     setup_wizard._verify_key("anthropic", "sk-ant-x")
     assert seen["max_tokens"] <= 32
+
+
+# -- picking a model during onboarding -----------------------------------
+
+
+def a_model(identifier, **kwargs):
+    from lai.agent.providers.listing import ModelInfo
+
+    return ModelInfo(id=identifier, **kwargs)
+
+
+def test_a_working_key_leads_straight_into_choosing_a_model(monkeypatch):
+    """With hundreds on offer, picking for somebody is worse than showing them
+    the free one at the top."""
+    from lai.setup_wizard import _offer_models
+
+    monkeypatch.setattr("lai.models.endpoint_for", lambda name: ("https://x.test/v1", ""))
+    monkeypatch.setattr(
+        "lai.agent.providers.listing.fetch",
+        lambda url, key, timeout=8.0: [a_model("free/one", free=True), a_model("paid/two")],
+    )
+    out, prompt = FakeOut(), ScriptedPrompt(confirms=[True], choices=[1])
+    assert _offer_models(out, prompt, "openrouter", "sk-or-x") == "paid/two"
+
+
+def test_the_default_can_be_kept(monkeypatch):
+    from lai.setup_wizard import _offer_models
+
+    monkeypatch.setattr("lai.models.endpoint_for", lambda name: ("https://x.test/v1", ""))
+    monkeypatch.setattr(
+        "lai.agent.providers.listing.fetch",
+        lambda url, key, timeout=8.0: [a_model("a"), a_model("b")],
+    )
+    out, prompt = FakeOut(), ScriptedPrompt(confirms=[True], choices=[2])  # past the end = keep
+    assert _offer_models(out, prompt, "openrouter", "k") == ""
+
+
+def test_declining_leaves_the_default(monkeypatch):
+    from lai.setup_wizard import _offer_models
+
+    monkeypatch.setattr("lai.models.endpoint_for", lambda name: ("https://x.test/v1", ""))
+    monkeypatch.setattr(
+        "lai.agent.providers.listing.fetch",
+        lambda url, key, timeout=8.0: [a_model("a"), a_model("b")],
+    )
+    out, prompt = FakeOut(), ScriptedPrompt(confirms=[False])
+    assert _offer_models(out, prompt, "openrouter", "k") == ""
+
+
+def test_a_vendor_that_will_not_list_its_models_is_not_a_problem(monkeypatch):
+    from lai.setup_wizard import _offer_models
+
+    def explode(name):
+        raise RuntimeError("no catalogue endpoint")
+
+    monkeypatch.setattr("lai.models.endpoint_for", explode)
+    assert _offer_models(FakeOut(), ScriptedPrompt(confirms=[True]), "weird", "k") == ""
+
+
+def test_a_single_model_is_not_worth_a_question(monkeypatch):
+    from lai.setup_wizard import _offer_models
+
+    monkeypatch.setattr("lai.models.endpoint_for", lambda name: ("https://x.test/v1", ""))
+    monkeypatch.setattr(
+        "lai.agent.providers.listing.fetch", lambda url, key, timeout=8.0: [a_model("only")]
+    )
+    assert _offer_models(FakeOut(), ScriptedPrompt(confirms=[True]), "x", "k") == ""
+
+
+def test_a_scripted_install_is_never_asked(monkeypatch):
+    """`--yes` must not stop to ask which model somebody wants."""
+    from lai.setup_wizard import _offer_models
+
+    assert _offer_models(FakeOut(), Prompt(interactive=False), "openrouter", "k") == ""
+
+
+def test_openrouter_is_offered_during_onboarding():
+    """Somebody who has installed this and has no key needs to see the option
+    that gives them hundreds of models for one signup."""
+    from lai.setup_wizard import BACKENDS
+
+    names = {entry[0] for entry in BACKENDS}
+    assert "openrouter" in names
+    signup = next(entry[2] for entry in BACKENDS if entry[0] == "openrouter")
+    assert signup.startswith("https://")

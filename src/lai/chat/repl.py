@@ -62,6 +62,20 @@ class Reader:
             complete_while_typing=True,
         )
 
+    def secret(self, prompt: str) -> str:
+        """Read something that must not appear on screen or in the history."""
+        if self.session is None:
+            import getpass  # noqa: PLC0415
+
+            try:
+                return getpass.getpass(_plain(prompt))
+            except (EOFError, KeyboardInterrupt):
+                return ""
+        try:
+            return self.session.prompt(_plain(prompt), is_password=True)
+        except (EOFError, KeyboardInterrupt):
+            return ""
+
     def read(self, prompt: str, *, bottom: str = "") -> str:
         if self.session is None:
             # Without prompt_toolkit the prompt is echoed literally, so the
@@ -111,7 +125,13 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False, resume
     runtime.extra["chat_session"] = session
     approver = _interactive_approver(out)
     reporter = _make_reporter(out, verbose=verbose)
-    ctx = Context(runtime=runtime, ask=_asker(out, reader))
+    ctx = Context(
+        runtime=runtime,
+        ask=_asker(out, reader),
+        secret=reader.secret,
+        confirm=_confirmer(out, reader),
+        say=out.write,
+    )
 
     _welcome(out, runtime)
     if resume:
@@ -197,6 +217,20 @@ def _asker(out, reader: Reader):
         return int(answer) - 1
 
     return ask
+
+
+def _confirmer(out, reader: Reader):
+    """A yes/no question. Anything but a clear no means yes, since these are
+    offers to help rather than warnings."""
+
+    def confirm(question: str) -> bool:
+        try:
+            answer = reader.read(f"{question} [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer not in ("n", "no")
+
+    return confirm
 
 
 def _welcome(out, runtime) -> None:

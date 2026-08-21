@@ -540,3 +540,112 @@ def test_a_search_matching_nothing_says_so(runtime, monkeypatch):
     monkeypatch.setattr("lai.models.available_models",
                         lambda name, **kwargs: [ModelInfo(id="a/one")])
     assert "nothing matching" in run(Context(runtime=runtime), "/models openrouter zzz")
+
+
+# -- discovering and adding a backend you do not have yet ----------------
+
+
+def guided(runtime, *, choices=(), secrets=(), confirms=(), said=None):
+    """A Context that answers a guided flow the way a person would."""
+    picks, keys, yesses = list(choices), list(secrets), list(confirms)
+    return Context(
+        runtime=runtime,
+        ask=lambda question, options: picks.pop(0) if picks else -1,
+        secret=lambda question: keys.pop(0) if keys else "",
+        confirm=lambda question: yesses.pop(0) if yesses else False,
+        say=(said.append if said is not None else None),
+    )
+
+
+def catalogue_of(*backends_):
+    return lambda runtime=None, **kwargs: list(backends_)
+
+
+def a_backend(name, status="ready", **kwargs):
+    from lai.models import Backend
+
+    kwargs.setdefault("label", name)
+    kwargs.setdefault("kind", "api")
+    kwargs.setdefault("model", "some-model")
+    kwargs.setdefault("detail", "detail")
+    return Backend(name=name, status=status, **kwargs)
+
+
+def test_a_backend_you_have_not_set_up_is_still_offered(runtime, monkeypatch):
+    """A choice you cannot see is a choice you do not have — and somebody who
+    just installed this has no key for anything."""
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        catalogue_of(a_backend("ollama"), a_backend("openrouter", status="known",
+                                                    label="OpenRouter — one key, most models")),
+    )
+    seen: dict = {}
+    ctx = Context(runtime=runtime, ask=lambda q, options: seen.setdefault("options", options) and -1)
+    run(ctx, "/model")
+    assert any("OpenRouter" in option for option in seen["options"])
+    assert any(option.startswith("+") for option in seen["options"]), "marked as needing setup"
+
+
+def test_choosing_one_walks_through_key_then_model(runtime, monkeypatch):
+    from lai.agent.providers.listing import ModelInfo
+
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        catalogue_of(a_backend("openrouter", status="known", signup="https://openrouter.ai/keys")),
+    )
+    monkeypatch.setattr(
+        "lai.agent.providers.registry.build_provider",
+        lambda config, **kwargs: FakeProvider(name=config.name, model=config.model or "default"),
+    )
+    monkeypatch.setattr(
+        "lai.models.available_models",
+        lambda name, **kwargs: [ModelInfo(id="z-ai/glm-5.2:free", free=True),
+                                ModelInfo(id="openai/gpt-4o", prompt_price=2.5)],
+    )
+    said: list = []
+    ctx = guided(
+        runtime,
+        choices=[0, 1],            # the backend, then the second model
+        secrets=["sk-or-v1-test"],
+        confirms=[False, True],    # no browser, yes to picking a model
+        said=said,
+    )
+    result = run(ctx, "/model")
+    assert "openai/gpt-4o" in result
+    assert any("openrouter.ai/keys" in line for line in said), "it says where to get one"
+
+
+def test_an_empty_paste_changes_nothing(runtime, monkeypatch):
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        catalogue_of(a_backend("openrouter", status="known")),
+    )
+    ctx = guided(runtime, choices=[0], secrets=[""], confirms=[False])
+    assert "unchanged" in run(ctx, "/model")
+
+
+def test_a_key_that_does_not_work_says_so_and_saves_nothing(runtime, tmp_path, monkeypatch):
+    from lai import config_file
+
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        catalogue_of(a_backend("openrouter", status="known")),
+    )
+
+    def refuse(config, **kwargs):
+        raise ProviderError("HTTP 401 invalid api key")
+
+    monkeypatch.setattr("lai.agent.providers.registry.build_provider", refuse)
+    ctx = guided(runtime, choices=[0], secrets=["sk-or-wrong"], confirms=[False])
+    assert "did not work" in run(ctx, "/model")
+    assert config_file.read(tmp_path) == {}
+
+
+def test_without_a_way_to_ask_it_names_the_command_instead(runtime, monkeypatch):
+    """Piped input has no secret prompt; the flow must still be reachable."""
+    monkeypatch.setattr(
+        "lai.chat.backends.catalogue",
+        catalogue_of(a_backend("openrouter", status="known")),
+    )
+    ctx = Context(runtime=runtime, ask=lambda q, options: 0)
+    assert "/key openrouter" in run(ctx, "/model")
