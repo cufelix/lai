@@ -46,6 +46,7 @@ class AnthropicProvider:
         timeout: float = 180.0,
         name: str = "anthropic",
         extra_headers: dict | None = None,
+        prompt_cache: bool = True,
     ) -> None:
         if not api_key:
             raise ProviderError(f"{name}: no API key configured")
@@ -54,6 +55,7 @@ class AnthropicProvider:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.thinking_budget = thinking_budget
+        self.prompt_cache = prompt_cache
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         headers = {
             "content-type": "application/json",
@@ -72,16 +74,19 @@ class AnthropicProvider:
     # -- request ---------------------------------------------------------
 
     def _payload(self, messages: list[Message], system: str, tools: list[dict] | None) -> dict:
+        encoded = [_encode_message(m) for m in messages]
         payload: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "messages": [_encode_message(m) for m in messages],
+            "messages": encoded,
         }
         if system:
             # A list block lets us mark it cacheable on providers that support it.
             payload["system"] = [{"type": "text", "text": system}]
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = list(tools)
+        if self.prompt_cache:
+            _mark_cacheable(payload)
         if self.thinking_budget > 0:
             payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             # Extended thinking requires the default temperature.
@@ -376,3 +381,41 @@ def _backoff(attempt: int, *, retry_after: str | None = None) -> None:
         except (TypeError, ValueError):
             pass
     time.sleep(min(1.5 * (2**attempt), 20.0))
+
+
+# Anthropic-style prompt caching. The prefix of a request — tools, then system,
+# then the conversation so far — is identical from one turn to the next, and an
+# agent loop re-sends all of it every single time. Marking the end of that
+# prefix means the far end charges a fraction for it and answers sooner.
+#
+# Four breakpoints are allowed; three are used, in the order the API concatenates
+# them, because a marker only caches what comes before it:
+#
+#   tools → system → the transcript up to the previous turn
+#
+# The newest message is deliberately left unmarked: it is different every time,
+# so marking it would write a cache entry that is never read.
+CACHE_CONTROL = {"type": "ephemeral"}
+MIN_CACHEABLE_MESSAGES = 3
+"""Below this the prefix is too small to be worth a cache write."""
+
+
+def _mark_cacheable(payload: dict) -> None:
+    """Add cache breakpoints to the stable prefix of a request."""
+    tools = payload.get("tools")
+    if tools:
+        tools[-1] = {**tools[-1], "cache_control": CACHE_CONTROL}
+
+    system = payload.get("system")
+    if system:
+        system[-1] = {**system[-1], "cache_control": CACHE_CONTROL}
+
+    messages = payload.get("messages") or []
+    if len(messages) < MIN_CACHEABLE_MESSAGES:
+        return
+    # The turn before the newest one: everything up to it is settled history.
+    for message in reversed(messages[:-1]):
+        blocks = message.get("content")
+        if isinstance(blocks, list) and blocks:
+            blocks[-1] = {**blocks[-1], "cache_control": CACHE_CONTROL}
+            return

@@ -515,10 +515,10 @@ class CLIAgentProvider:
             parts.append(
                 "## Tools LAI can run for you\n"
                 "These belong to LAI. Name one in \"tool_calls\" to have it run.\n"
+                "Each is listed as name(argument: type) — required arguments first, "
+                "optional ones marked with ?.\n"
             )
-            for tool in tools:
-                schema = json.dumps(tool.get("input_schema", {}), ensure_ascii=False)
-                parts.append(f"### {tool.get('name')}\n{tool.get('description', '')}\ninput schema: {schema}\n")
+            parts.extend(_describe_tool(tool) for tool in tools)
         if system:
             parts.append("## Your operating context\n" + system)
         parts.append("## Conversation so far\n" + _transcript(messages))
@@ -544,6 +544,44 @@ def _fit(prompt: str, limit: int) -> str:
     keep = limit - len(marker)
     head = int(keep * 0.55)
     return prompt[:head] + marker + prompt[-(keep - head):]
+
+
+def _describe_tool(tool: dict) -> str:
+    """One tool as a signature plus prose, rather than a JSON Schema blob.
+
+    These CLIs are stateless, so the whole tool list is re-sent on every turn
+    and no prompt cache can help. Raw schemas spend most of their characters on
+    punctuation and the word "type": a signature carries the same facts —
+    argument names, kinds, which are required — in a third of the space, and is
+    easier to read besides.
+    """
+    schema = tool.get("input_schema") or {}
+    properties = schema.get("properties") or {}
+    required = set(schema.get("required") or ())
+
+    signature = ", ".join(
+        f"{name}{'' if name in required else '?'}: {_type_of(spec)}"
+        for name, spec in properties.items()
+    )
+    lines = [f"### {tool.get('name')}({signature})", str(tool.get("description", "")).strip()]
+    described = [
+        f"  {name} — {str(spec.get('description', '')).strip()}"
+        for name, spec in properties.items()
+        if spec.get("description")
+    ]
+    lines.extend(described)
+    return "\n".join(lines) + "\n"
+
+
+def _type_of(spec: dict) -> str:
+    """A property's type, including the choices when there are only a few."""
+    choices = spec.get("enum")
+    if choices and len(choices) <= 8:
+        return "|".join(str(choice) for choice in choices)
+    kind = spec.get("type") or "any"
+    if kind == "array":
+        return f"{_type_of(spec.get('items') or {})}[]"
+    return str(kind)
 
 
 # -- parsing --------------------------------------------------------------

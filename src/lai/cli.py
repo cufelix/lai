@@ -272,6 +272,21 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
     return report
 
 
+def _usage_line(usage) -> str:
+    """What the run cost, and what caching saved.
+
+    A saving nobody can see is a saving nobody believes, and cache reads are
+    charged at a fraction of fresh input — so the split is worth stating rather
+    than folding into one number.
+    """
+    parts = [f"{usage.input_tokens:,} in / {usage.output_tokens:,} out tokens"]
+    cached = getattr(usage, "cache_read_tokens", 0)
+    if cached:
+        billed = usage.input_tokens + cached
+        parts.append(f"{cached:,} of {billed:,} read from cache ({cached / billed:.0%})")
+    return " · ".join(parts)
+
+
 def _no_provider(out: Out, runtime) -> int:
     """The most common wall a new user hits. Name the command that gets past it."""
     out.error(runtime.provider_error or "no model backend available")
@@ -301,11 +316,7 @@ def cmd_do(args) -> int:
             print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         else:
             out.write(result.render())
-            usage = result.usage
-            out.write(
-                f"[dim]{usage.input_tokens} in / {usage.output_tokens} out tokens · "
-                f"session {result.session_id}[/dim]"
-            )
+            out.write(f"[dim]{_usage_line(result.usage)} · session {result.session_id}[/dim]")
         return 0 if result.ok else 1
     finally:
         runtime.close()

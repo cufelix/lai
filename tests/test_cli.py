@@ -651,3 +651,30 @@ def test_models_use_force_saves_anyway(monkeypatch):
     monkeypatch.setattr("lai.models.check", lambda name, **kw: (False, "no API key"))
     assert main(["models", "use", "groq", "--force"]) == 0
     assert config_file.read(load_config().home)["provider"]["name"] == "groq"
+
+
+# -- what a run cost -----------------------------------------------------
+
+
+def test_the_usage_line_states_the_plain_cost():
+    from lai.agent.providers.base import Usage
+    from lai.cli import _usage_line
+
+    assert "1,200 in / 300 out" in _usage_line(Usage(input_tokens=1200, output_tokens=300))
+
+
+def test_the_usage_line_shows_what_caching_saved():
+    """A saving nobody can see is a saving nobody believes."""
+    from lai.agent.providers.base import Usage
+    from lai.cli import _usage_line
+
+    line = _usage_line(Usage(input_tokens=500, output_tokens=200, cache_read_tokens=9500))
+    assert "9,500 of 10,000 read from cache" in line
+    assert "95%" in line
+
+
+def test_no_cache_no_noise():
+    from lai.agent.providers.base import Usage
+    from lai.cli import _usage_line
+
+    assert "cache" not in _usage_line(Usage(input_tokens=10, output_tokens=5))

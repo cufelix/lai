@@ -294,6 +294,7 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
             thinking_budget=config.thinking_budget,
             timeout=config.timeout,
             name=name,
+            prompt_cache=config.prompt_cache,
         )
     if name in ("openai", "openrouter", "ollama"):
         if name == "ollama":

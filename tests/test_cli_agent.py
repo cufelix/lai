@@ -538,3 +538,90 @@ def test_the_protocol_tells_the_cli_the_tools_are_not_its_own():
     assert "not a trick" in lowered
     assert "should not look for them" in lowered
     assert "task_blocked" in lowered, "there must be a sanctioned way to refuse"
+
+
+# -- prompt size on a backend that cannot cache --------------------------
+
+
+def test_tools_are_rendered_as_signatures_not_json_schemas():
+    """These CLIs re-send every tool on every turn and no cache can help, so
+    the schemas' punctuation is pure repeated cost."""
+    from lai.agent.providers.cli_agent import _describe_tool
+
+    described = _describe_tool({
+        "name": "app_close",
+        "description": "Terminate an application process.",
+        "input_schema": {
+            "properties": {
+                "pid": {"type": "integer", "description": "Process id"},
+                "match": {"type": "string", "description": "Title substring"},
+            },
+            "required": ["pid"],
+        },
+    })
+    assert "app_close(pid: integer, match?: string)" in described
+    assert "Process id" in described, "per-argument help still earns its place"
+    assert '"type"' not in described and "{" not in described
+
+
+def test_a_short_enum_is_shown_as_the_choices():
+    from lai.agent.providers.cli_agent import _describe_tool
+
+    described = _describe_tool({
+        "name": "window_arrange",
+        "description": "Arrange a window.",
+        "input_schema": {"properties": {
+            "state": {"type": "string", "enum": ["maximized", "minimize", "restore"]},
+        }},
+    })
+    assert "state?: maximized|minimize|restore" in described
+
+
+def test_a_long_enum_falls_back_to_the_type():
+    from lai.agent.providers.cli_agent import _describe_tool
+
+    described = _describe_tool({
+        "name": "t", "description": "d",
+        "input_schema": {"properties": {"k": {"type": "string", "enum": [str(i) for i in range(20)]}}},
+    })
+    assert "k?: string" in described
+
+
+def test_an_array_says_what_it_holds():
+    from lai.agent.providers.cli_agent import _describe_tool
+
+    described = _describe_tool({
+        "name": "t", "description": "d",
+        "input_schema": {"properties": {"steps": {"type": "array", "items": {"type": "string"}}}},
+    })
+    assert "steps?: string[]" in described
+
+
+def test_a_tool_without_arguments_reads_cleanly():
+    from lai.agent.providers.cli_agent import _describe_tool
+
+    assert _describe_tool({"name": "screenshot", "description": "Capture."}).startswith(
+        "### screenshot()"
+    )
+
+
+def test_the_rendered_prompt_is_substantially_smaller_than_the_schemas():
+    from lai.agent.providers.cli_agent import _describe_tool
+
+    tools = [
+        {
+            "name": f"tool_{i}",
+            "description": "Does a thing worth describing in a sentence.",
+            "input_schema": {
+                "properties": {
+                    "alpha": {"type": "string", "description": "The first argument."},
+                    "beta": {"type": "integer", "description": "The second argument."},
+                },
+                "required": ["alpha"],
+            },
+        }
+        for i in range(40)
+    ]
+    as_json = len(json.dumps(tools))
+    as_text = sum(len(_describe_tool(tool)) for tool in tools)
+    assert as_text < as_json * 0.7

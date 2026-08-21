@@ -43,6 +43,14 @@ class ProviderConfig:
     temperature: float = 1.0
     thinking_budget: int = 0
     timeout: float = 180.0
+    prompt_cache: bool = True
+    """Ask the backend to cache the unchanging prefix of each request.
+
+    An agent loop re-sends the tools, the system prompt and the whole
+    conversation on every turn. Caching that prefix is the single largest
+    saving available — the far end charges a fraction for it and answers
+    sooner — and costs nothing on backends that ignore the marker.
+    """
     fallback: tuple[str, ...] = ("auto",)
     """Backends to try when this one refuses — quota, auth or an outage.
 
@@ -336,6 +344,7 @@ def load_config(
         temperature=float(provider_data.get("temperature", 1.0)),
         thinking_budget=int(env.get("LAI_THINKING", provider_data.get("thinking_budget", 0))),
         timeout=float(provider_data.get("timeout", 180.0)),
+        prompt_cache=_bool(env.get("LAI_PROMPT_CACHE"), provider_data.get("prompt_cache", True)),
         fallback=_fallback_chain(env, provider_data),
     )
 

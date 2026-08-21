@@ -372,7 +372,8 @@ def test_thinking_budget_replaces_temperature():
         payload = provider._payload([], "sys", None)
         assert payload["thinking"] == {"type": "enabled", "budget_tokens": 2048}
         assert "temperature" not in payload, "extended thinking requires the default temperature"
-        assert payload["system"] == [{"type": "text", "text": "sys"}]
+        # The block may also carry a cache marker; what matters here is the text.
+        assert payload["system"][0]["text"] == "sys"
     finally:
         provider.close()
 
