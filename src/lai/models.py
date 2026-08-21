@@ -57,7 +57,8 @@ class Backend:
         }
 
 
-def discover(*, probe_local: bool = True, timeout: float = 0.6, home=None) -> list[Backend]:
+def discover(*, probe_local: bool = True, timeout: float = 0.6, home=None,
+             deny: tuple = ()) -> list[Backend]:
     """Everything LAI could use, best first.
 
     Local endpoints are probed by opening a connection rather than assumed from
@@ -71,6 +72,7 @@ def discover(*, probe_local: bool = True, timeout: float = 0.6, home=None) -> li
     backends: list[Backend] = []
     seen: set[str] = set()
     resting = _resting(home)
+    denied = {name.strip().lower() for name in (deny or ()) if str(name).strip()}
 
     # 1. Whatever the runtime would actually pick, in its own order.
     try:
@@ -156,6 +158,10 @@ def discover(*, probe_local: bool = True, timeout: float = 0.6, home=None) -> li
             vision=vendor.vision,
         ))
 
+    if denied:
+        # Saying "never use this" once has to hold in the listing too, or the
+        # menu keeps offering what the user already ruled out.
+        backends = [b for b in backends if b.name not in denied]
     if resting:
         backends = [
             replace(backend, resting=resting[backend.name])

@@ -51,6 +51,14 @@ class ProviderConfig:
     saving available — the far end charges a fraction for it and answers
     sooner — and costs nothing on backends that ignore the marker.
     """
+    deny: tuple[str, ...] = ()
+    """Backends never to use, whatever else says otherwise.
+
+    A machine can have a working login for a model its owner does not want
+    used — on cost, on policy, or simply on preference. Saying so once has to
+    hold everywhere: auto-detection, the failover chain, and the menus. A
+    denied backend is not offered and not fallen back to.
+    """
     fallback: tuple[str, ...] = ("auto",)
     """Backends to try when this one refuses — quota, auth or an outage.
 
@@ -66,6 +74,7 @@ class ProviderConfig:
             "api_key": ("set" if self.api_key else "unset"),
             "max_tokens": self.max_tokens,
             "fallback": list(self.fallback),
+            "deny": list(self.deny),
         }
 
 
@@ -345,6 +354,7 @@ def load_config(
         thinking_budget=int(env.get("LAI_THINKING", provider_data.get("thinking_budget", 0))),
         timeout=float(provider_data.get("timeout", 180.0)),
         prompt_cache=_bool(env.get("LAI_PROMPT_CACHE"), provider_data.get("prompt_cache", True)),
+        deny=_tuple(env.get("LAI_DENY") or provider_data.get("deny"), ()),
         fallback=_fallback_chain(env, provider_data),
     )
 

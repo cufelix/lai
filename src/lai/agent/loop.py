@@ -116,6 +116,7 @@ class Agent:
         system_extra: str = "",
         journal=None,
         desktop_lock=None,
+        memory=None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -129,6 +130,8 @@ class Agent:
         self.desktop_lock = desktop_lock
         """Cross-process claim on the desktop, held for the length of a run."""
         self._idle_probe = None
+        self.memory = memory
+        """Long-term store; recalled into the prompt, not only via tools."""
         self.session = session or Session()
         self.approver = approver
         self.on_event = on_event
@@ -314,17 +317,26 @@ class Agent:
     # -- internals -------------------------------------------------------
 
     def _knowledge_block(self, task: str = "") -> str:
-        """Notes from earlier runs, if the journal is readable and has any."""
-        if self.journal is None or not getattr(self.config, "learning", None):
-            return ""
-        if not self.config.learning.enabled:
+        """Everything the agent already knows, gathered before the run starts.
+
+        Notes about this machine, facts it was told to remember, and what it was
+        doing lately — assembled once and bounded. An improvement, never a
+        prerequisite: if any of it is unreadable the run proceeds without it.
+        """
+        learning = getattr(self.config, "learning", None)
+        if learning is None or not learning.enabled:
             return ""
         try:
-            return self.journal.context_block(
-                task, limit=self.config.learning.max_notes_in_prompt
+            from .recall import build  # noqa: PLC0415
+
+            return build(
+                journal=self.journal,
+                memory=self.memory,
+                sessions_dir=getattr(self.config, "sessions_dir", None),
+                task=task,
+                limit=learning.max_notes_in_prompt,
             )
         except Exception:
-            # Knowledge is an improvement, never a prerequisite.
             return ""
 
     def _build_system_prompt(self, task: str = "") -> str:
@@ -501,9 +513,42 @@ class Agent:
 
         self._emit("compacting", {"estimated_tokens": estimated})
         summary = self._summarise_history()
+        self._promote_to_memory(summary)
         dropped = self.session.compact(summary)
         self.audit.write("compacted", dropped=dropped, estimated_tokens=estimated)
         self._emit("compacted", {"dropped": dropped})
+
+    def _promote_to_memory(self, summary: str) -> None:
+        """Keep the durable part of what is about to be dropped.
+
+        Compaction is the moment a conversation stops being working memory. A
+        summary put back into the transcript survives until the *next*
+        compaction and then goes too — so anything about this machine that will
+        still be true tomorrow belongs in the journal, not only in the summary.
+        """
+        if self.journal is None or summary.strip() == "":
+            return
+        learning = getattr(self.config, "learning", None)
+        if learning is None or not (learning.enabled and learning.reflect):
+            return
+        try:
+            from .reflect import reflect  # noqa: PLC0415
+
+            notes = reflect(
+                provider=self.provider,
+                journal=self.journal,
+                task=self.session.task or "",
+                # Compaction is triggered by transcript size, so that is the
+                # honest measure of how much happened — `steps` can lag it.
+                result=RunResult(status="compacting", steps=len(self.session.messages)),
+                trace=summary,
+                audit=self.audit,
+            )
+            if notes:
+                self._emit("learned", {"notes": [n.name for n in notes],
+                                       "titles": [n.title for n in notes]})
+        except Exception:
+            pass  # losing a lesson must never fail the run
 
     def _context_budget(self) -> int:
         """How much transcript this backend can actually take, in tokens.

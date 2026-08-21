@@ -83,6 +83,7 @@ class Runtime:
             system_extra=system_extra,
             journal=self.journal,
             desktop_lock=self.desktop_lock,
+            memory=self.memory,
         )
         # Shared, long-lived services the tools reach through ToolContext.extra.
         # `agent` is set last so `delegate` can spawn a child of this very run.

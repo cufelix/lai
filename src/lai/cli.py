@@ -1070,7 +1070,10 @@ def cmd_models(args) -> int:
             out.write(f"  [dim]{detail}[/dim]")
         return 0
 
-    found = backends.discover(probe_local=not args.no_probe, home=load_config().home)
+    _config = load_config()
+    found = backends.discover(
+        probe_local=not args.no_probe, home=_config.home, deny=_config.provider.deny
+    )
     if args.json:
         print(json.dumps([b.to_dict() for b in found], indent=2))
         return 0

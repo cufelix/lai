@@ -24,7 +24,8 @@ def catalogue(runtime=None, *, probe: bool = True) -> list:
     from ..models import discover  # noqa: PLC0415
 
     home = runtime.config.home if runtime is not None else None
-    return discover(probe_local=probe, home=home)
+    deny = runtime.config.provider.deny if runtime is not None else ()
+    return discover(probe_local=probe, home=home, deny=deny)
 
 
 def describe(runtime) -> dict:

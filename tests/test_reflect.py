@@ -188,3 +188,69 @@ def test_the_trace_shows_calls_results_and_speech():
 
 def test_the_trace_survives_an_empty_session():
     assert build_trace(type("S", (), {"messages": []})()) == ""
+
+
+# -- compaction is when facts move out of the transcript -----------------
+
+
+def test_compacting_promotes_durable_facts_into_the_journal(journal, tmp_path):
+    """A summary put back into the transcript survives until the next
+    compaction and then goes too. What will still be true tomorrow has to
+    leave the conversation entirely."""
+    from lai.agent.loop import Agent
+    from lai.agent.session import Session
+    from lai.config import load_config
+
+    agent = Agent.__new__(Agent)
+    agent.config = load_config().with_overrides(home=tmp_path)
+    agent.journal = journal
+    agent.provider = FakeProvider(answer(lesson(text="the save dialog field is called Name:")))
+    agent.session = Session()
+    agent.session.task = "save a file"
+    agent.session.messages = [Message.user("save a file")] * 12  # a transcript worth compacting
+    agent.audit = FakeAudit()
+    agent.events: list = []
+    agent._emit = lambda kind, payload: agent.events.append((kind, payload))
+
+    agent._promote_to_memory("worked through the save dialog; the field is called Name:")
+
+    assert "Name:" in journal.get("editor").body
+    assert any(kind == "learned" for kind, _ in agent.events)
+
+
+def test_nothing_is_promoted_when_learning_is_off(journal, tmp_path):
+    from dataclasses import replace
+
+    from lai.agent.loop import Agent
+    from lai.agent.session import Session
+    from lai.config import load_config
+
+    config = load_config().with_overrides(home=tmp_path)
+    config = config.with_overrides(learning=replace(config.learning, reflect=False))
+
+    agent = Agent.__new__(Agent)
+    agent.config = config
+    agent.journal = journal
+    agent.provider = FakeProvider(answer(lesson()))
+    agent.session = Session()
+    agent.audit = FakeAudit()
+    agent._emit = lambda kind, payload: None
+
+    agent._promote_to_memory("something happened")
+    assert journal.list() == []
+
+
+def test_a_failure_while_promoting_never_breaks_the_compaction(journal, tmp_path):
+    from lai.agent.loop import Agent
+    from lai.agent.session import Session
+    from lai.config import load_config
+
+    agent = Agent.__new__(Agent)
+    agent.config = load_config().with_overrides(home=tmp_path)
+    agent.journal = journal
+    agent.provider = FakeProvider(explode=True)
+    agent.session = Session()
+    agent.audit = FakeAudit()
+    agent._emit = lambda kind, payload: None
+
+    agent._promote_to_memory("a summary")  # must not raise

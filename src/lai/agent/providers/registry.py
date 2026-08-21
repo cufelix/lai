@@ -229,9 +229,16 @@ def build_chain(config: ProviderConfig, *, home=None) -> list:
 
     from .fallback import Candidate  # noqa: PLC0415
 
-    credentials = discover_credentials()
+    denied = {n.strip().lower() for n in (config.deny or ()) if n.strip()}
+    credentials = [c for c in discover_credentials() if c.provider not in denied]
     name = (config.name or "auto").lower()
     resting = _resting(home)
+
+    if name in denied:
+        raise ProviderError(
+            f"{name} is on the deny list",
+            detail="remove it from provider.deny, or configure a different backend",
+        )
 
     if name == "auto":
         if not credentials:
@@ -264,7 +271,7 @@ def build_chain(config: ProviderConfig, *, home=None) -> list:
         if not standby or standby in seen or standby == "auto":
             continue
         seen.add(standby)
-        if standby in resting:
+        if standby in resting or standby in denied:
             continue
         credential = next((c for c in credentials if c.provider == standby), None)
         # A standby never inherits the primary's key, model or URL — a z.ai key
