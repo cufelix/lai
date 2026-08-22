@@ -128,6 +128,9 @@ class VirtualDisplay:
         # screen sets it. Remembering the old value is what stops the variable
         # outliving the server and pointing everything at a dead socket.
         self._restore_display = os.environ.get("DISPLAY")
+        # A window appearing takes your focus mid-sentence. Note where it was
+        # so it can be handed straight back.
+        focused = _focused_window() if chosen == "Xephyr" else None
 
         self._server_process = subprocess.Popen(  # noqa: S603
             _server_command(chosen, self.display, self.size, self.depth),
@@ -143,6 +146,8 @@ class VirtualDisplay:
 
         if window_manager:
             self._start_window_manager()
+        if chosen == "Xephyr":
+            _give_focus_back(focused)
         return self.display
 
     def stop(self) -> None:
@@ -224,11 +229,62 @@ def _preferred_server() -> str:
     return ""
 
 
+WATCH_TITLE = "LAI — the agent's screen · minimise this, it keeps working"
+WATCH_CLASS = "lai-agent-screen"
+
+
 def _server_command(server: str, display: str, size: tuple, depth: int) -> list[str]:
     geometry = f"{size[0]}x{size[1]}x{depth}"
     if server == "Xvfb":
         return ["Xvfb", display, "-screen", "0", geometry, "-nolisten", "tcp", "-noreset"]
-    return ["Xephyr", display, "-screen", f"{size[0]}x{size[1]}", "-resizeable", "-nolisten", "tcp"]
+    return [
+        "Xephyr", display,
+        "-screen", f"{size[0]}x{size[1]}",
+        "-resizeable",
+        "-nolisten", "tcp",
+        # Without this Xephyr grabs your keyboard and mouse the moment the
+        # pointer crosses into the window — which turns "I want to watch it"
+        # into "it took my keyboard again". The whole point of a window you can
+        # glance at is that glancing costs nothing.
+        "-no-host-grab",
+        # Draw the agent's pointer inside the window instead of borrowing the
+        # host's, so you can see where it is actually clicking. It genuinely
+        # has its own mouse; this is what makes that visible.
+        "-sw-cursor",
+        "-title", WATCH_TITLE,
+        "-name", WATCH_CLASS,
+    ]
+
+
+def _focused_window():
+    """Whatever the human is typing into right now, if it can be determined."""
+    try:
+        from .windows import WindowManager  # noqa: PLC0415
+
+        windows = WindowManager()
+        try:
+            active = windows.active_window()
+            return active.id if active else None
+        finally:
+            windows.close()
+    except Exception:
+        return None
+
+
+def _give_focus_back(window_id) -> None:
+    """Hand focus back to where it was before the watch window appeared."""
+    if window_id is None:
+        return
+    try:
+        from .windows import WindowManager  # noqa: PLC0415
+
+        windows = WindowManager()
+        try:
+            windows.focus(window_id)
+        finally:
+            windows.close()
+    except Exception:
+        pass  # a WM that refuses is not worth failing a run over
 
 
 def _wait_for_display(display: str, process, timeout: float) -> None:

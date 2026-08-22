@@ -280,7 +280,6 @@ script if you already have one. If a key is already in your environment,
 lai                             # setup if new, otherwise the chat interface
 lai --continue                  # pick up the last conversation
 lai do "<task>"                 # one autonomous run
-lai do "<task>" --watch         # …with its screen shown in a window, so you can see it
 lai do "<task>" --here          # …on *your* desktop, for tasks about your open windows
 lai web                         # the same agent, in your browser
 lai tui                         # full-screen dashboard
@@ -554,8 +553,8 @@ typing goes wherever your focus went, and the thing it opens covers what you
 were reading. Taking turns makes that less frequent, not less annoying.
 
 ```bash
-lai do "open the calculator and work out 12 * 34"   # its screen
-lai do "..." --watch                                # its screen, in a window on yours
+lai do "open the calculator and work out 12 * 34"   # its screen, in a window
+lai do "..." --unwatched                            # its screen, off-screen entirely
 lai do "..." --here                                 # your desktop, taking turns
 ```
 
@@ -565,15 +564,23 @@ needs `--here`; the agent is told this and will say so rather than guessing.
 `lai observe` always reports your desktop, because that is the whole point of
 the command.
 
+By default that screen is shown in a window on yours (Xephyr), so you can watch
+it work. The window is deliberately unobtrusive: it does not take focus when it
+appears — focus goes straight back to whatever you were typing into — and it
+never grabs your keyboard or mouse when the pointer crosses it. It draws the
+agent's own cursor inside itself, so you can see where it is actually clicking.
+Minimise it and the agent carries on; it is a window onto a server, not the
+server.
+
 | | |
 |---|---|
-| **Xvfb** | entirely off-screen. Watch through `lai web`, a screenshot, or not at all. |
-| **Xephyr** | nested in a window on your desktop — what `--watch` uses. |
+| **Xephyr** | nested in a window on your desktop. The default, and what `--watch` asks for. |
+| **Xvfb** | entirely off-screen. `--unwatched`, or `watch = false`. |
 
 ```toml
 [desktop]
 own_display = "auto"   # auto = its own screen when possible · always · never
-watch = false          # true to always show it in a window
+watch = true           # false to keep it off-screen entirely
 ```
 
 `auto` falls back to your desktop and says so if no virtual X server is
@@ -770,6 +777,33 @@ lai skills install ./my-skill               # local
 ```
 
 The agent can also install a skill mid-task when it finds it lacks a capability.
+
+### Models without function calling
+
+Native tool calling is an API feature, and plenty of capable models do not have
+it — Hermes, Qwen, most things served straight off Ollama or vLLM. They were
+trained to write the call instead:
+
+```
+<tool_call>
+{"name": "window_list", "arguments": {}}
+</tool_call>
+```
+
+LAI reads both forms, so those models work without configuration. It also
+writes the schemas into the prompt in that shape when a backend says it has no
+function calling — discovered from the refusal, once, the same way a model with
+no vision is. Mistral's `[TOOL_CALLS]` and Llama's `<|python_tag|>` are
+understood too. A bare JSON object in the prose is deliberately *not*: a model
+explaining what it would call has not called it.
+
+```toml
+[provider]
+tool_dialect = "auto"   # auto · native (never fall back) · text (always ask in the prompt)
+```
+
+Reasoning that arrives in its own field — DeepSeek's `reasoning_content`, and
+anything OpenRouter proxies from it — is kept rather than dropped.
 
 ## MCP tools
 

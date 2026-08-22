@@ -304,3 +304,124 @@ def test_a_second_refusal_is_not_swallowed():
     recorder = Recorder(fail_times=2, message="No endpoints found that support image input")
     with pytest.raises(ProviderError, match="image input"):
         blind_provider(recorder).complete(screenshot_turn())
+
+
+# -- the shape this API actually documents -------------------------------
+
+
+def test_anthropic_shaped_tools_are_translated():
+    """The agent describes its tools once, in one dialect, and every provider
+    translates. Forwarding them verbatim happened to work against OpenRouter,
+    which normalises — and meant no tools at all against anything stricter."""
+    from lai.agent.providers.openai_api import as_openai_tools
+
+    out = as_openai_tools([{
+        "name": "window_list",
+        "description": "list windows",
+        "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+    }])
+    assert out == [{
+        "type": "function",
+        "function": {
+            "name": "window_list",
+            "description": "list windows",
+            "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+        },
+    }]
+
+
+def test_tools_already_in_the_right_shape_are_left_alone():
+    from lai.agent.providers.openai_api import as_openai_tools
+
+    native = [{"type": "function", "function": {"name": "a", "parameters": {}}}]
+    assert as_openai_tools(native) == native
+
+
+def test_a_tool_with_no_schema_still_gets_a_valid_one():
+    from lai.agent.providers.openai_api import as_openai_tools
+
+    out = as_openai_tools([{"name": "a", "description": "b"}])
+    assert out[0]["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
+def test_the_request_carries_translated_tools():
+    recorder = Recorder(fail_times=0, message="")
+    provider = blind_provider(recorder)
+    provider.complete([Message.user("hi")], tools=[{"name": "a", "input_schema": {}}])
+    assert recorder.calls[0]["tools"][0]["type"] == "function"
+
+
+# -- a backend with no function calling ----------------------------------
+
+
+TOOLS = [{"name": "window_list", "description": "list windows", "input_schema": {}}]
+
+
+def test_a_backend_without_tools_is_asked_in_the_prompt_instead():
+    recorder = Recorder(fail_times=1, message="No endpoints found that support tool use")
+    provider = blind_provider(recorder)
+    provider.complete([Message.user("hi")], system="be useful", tools=TOOLS)
+
+    assert len(recorder.calls) == 2
+    assert "tools" in recorder.calls[0]
+    assert "tools" not in recorder.calls[1], "asking again the same way would fail again"
+    system = recorder.calls[1]["messages"][0]["content"]
+    assert "<tools>" in system and "window_list" in system
+    assert "be useful" in system, "the real instructions must survive"
+
+
+def test_the_discovery_holds_for_the_rest_of_the_process():
+    recorder = Recorder(fail_times=1, message="does not support tools")
+    provider = blind_provider(recorder)
+    provider.complete([Message.user("one")], tools=TOOLS)
+    provider.complete([Message.user("two")], tools=TOOLS)
+    assert provider.tool_dialect == "text"
+    assert len(recorder.calls) == 3
+
+
+def test_a_written_call_is_read_back_as_a_call():
+    provider = OpenAIProvider(api_key="k", model="hermes", tool_dialect="text")
+    provider._request = lambda path, payload: {
+        "choices": [{"message": {
+            "content": 'Looking.\n<tool_call>{"name": "window_list", "arguments": {}}</tool_call>'
+        }, "finish_reason": "stop"}],
+        "usage": {},
+    }
+    turn = provider.complete([Message.user("hi")], tools=TOOLS)
+    assert turn.stop_reason == "tool_use", "a stop reason of `stop` would end the run"
+    assert turn.text == "Looking."
+    calls = [b for b in turn.message.content if isinstance(b, ToolCall)]
+    assert [(c.name, c.input) for c in calls] == [("window_list", {})]
+
+
+def test_native_is_never_downgraded():
+    recorder = Recorder(fail_times=1, message="does not support tools")
+    provider = OpenAIProvider(api_key="k", model="m", tool_dialect="native")
+    provider._request = recorder
+    with pytest.raises(ProviderError, match="does not support tools"):
+        provider.complete([Message.user("hi")], tools=TOOLS)
+
+
+# -- reasoning that arrives in its own field -----------------------------
+
+
+def test_deepseek_style_reasoning_is_kept():
+    """Dropping it loses the part of the answer that explains the rest."""
+    from lai.agent.providers.base import ThinkingBlock
+
+    turn = _decode_response({
+        "choices": [{"message": {"content": "42", "reasoning_content": "six by seven"}}],
+        "usage": {},
+    })
+    thinking = [b for b in turn.message.content if isinstance(b, ThinkingBlock)]
+    assert thinking and thinking[0].thinking == "six by seven"
+    assert turn.text == "42"
+
+
+def test_an_empty_reasoning_field_adds_nothing():
+    from lai.agent.providers.base import ThinkingBlock
+
+    turn = _decode_response({
+        "choices": [{"message": {"content": "42", "reasoning_content": "   "}}], "usage": {},
+    })
+    assert not [b for b in turn.message.content if isinstance(b, ThinkingBlock)]

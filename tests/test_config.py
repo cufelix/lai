@@ -224,7 +224,7 @@ def test_the_agent_gets_its_own_screen_unless_told_otherwise():
     from lai.config import DesktopConfig
 
     assert DesktopConfig().own_display == "auto"
-    assert DesktopConfig().watch is False
+    assert DesktopConfig().watch is True, "an agent you cannot see is one you cannot supervise"
 
 
 def test_an_unknown_screen_mode_is_refused():
@@ -238,7 +238,22 @@ def test_the_screen_settings_are_read_from_the_file(tmp_path):
     from lai.config import load_config
 
     path = tmp_path / "config.toml"
-    path.write_text('[desktop]\nown_display = "never"\nwatch = true\n', encoding="utf-8")
+    path.write_text('[desktop]\nown_display = "never"\nwatch = false\n', encoding="utf-8")
     config = load_config(path)
     assert config.desktop.own_display == "never"
-    assert config.desktop.watch is True
+    assert config.desktop.watch is False
+
+
+def test_how_tools_are_offered_is_configurable():
+    """Hermes, Qwen and most local servers were trained to be asked in the
+    prompt, not through a function-calling API they do not have."""
+    from lai.config import ProviderConfig
+
+    assert ProviderConfig().tool_dialect == "auto"
+
+    from lai.agent.providers import registry
+
+    provider = registry._instantiate(
+        "openai", ProviderConfig(name="openai", api_key="k", model="m", tool_dialect="text"), None
+    )
+    assert provider.tool_dialect == "text"

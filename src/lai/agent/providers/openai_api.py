@@ -13,6 +13,7 @@ import time
 import httpx
 
 from ...errors import ProviderError
+from . import toolcall_text
 from .base import (
     ImageBlock,
     Message,
@@ -27,6 +28,17 @@ from .base import (
 
 RETRY_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
 MAX_RETRIES = 4
+
+TOOLLESS_MARKERS = (
+    "no endpoints found that support tool use",
+    "does not support tools",
+    "does not support function",
+    "tool use is not supported",
+    "function calling is not supported",
+    "tools are not supported",
+    "unsupported parameter: 'tools'",
+)
+"""How the various hosts say "this model has no function calling"."""
 
 BLIND_MARKERS = (
     "no endpoints found that support image input",
@@ -59,8 +71,11 @@ class OpenAIProvider:
         timeout: float = 180.0,
         name: str = "openai",
         supports_vision: bool = True,
+        tool_dialect: str = "auto",
     ) -> None:
         self.name = name
+        self.tool_dialect = tool_dialect
+        """auto (native, falling back to text) · native · text."""
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -82,6 +97,10 @@ class OpenAIProvider:
         tools: list[dict] | None = None,
         stream: StreamCallback | None = None,
     ) -> TurnResult:
+        # Tools go in the prompt rather than the request when the backend has
+        # no function calling; the reply is then read back out of the text.
+        if tools and self.tool_dialect == "text":
+            system = "\n\n".join(part for part in (system, toolcall_text.describe(tools)) if part)
         wire = self._wire(messages, system)
 
         payload: dict = {
@@ -90,22 +109,29 @@ class OpenAIProvider:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
-        if tools:
-            payload["tools"] = tools
+        if tools and self.tool_dialect != "text":
+            payload["tools"] = as_openai_tools(tools)
             payload["tool_choice"] = "auto"
 
         try:
             data = self._request("/chat/completions", payload)
         except ProviderError as exc:
-            if not self._went_blind(exc):
+            if self._went_blind(exc):
+                # Losing the run over a screenshot would be absurd when the text
+                # of the conversation is still perfectly usable. Re-send without
+                # the images, and stop attaching them for the rest of this run.
+                self.supports_vision = False
+                data = self._request(
+                    "/chat/completions", {**payload, "messages": self._wire(messages, system)}
+                )
+            elif self._has_no_tools(exc):
+                # Ask in the prompt instead. Discovered the same way vision is:
+                # from the refusal, once, rather than from a catalogue that
+                # cannot know what a router put behind this model name.
+                self.tool_dialect = "text"
+                return self.complete(messages, system=system, tools=tools, stream=stream)
+            else:
                 raise
-            # Losing the run over a screenshot would be absurd when the text of
-            # the conversation is still perfectly usable. Re-send without the
-            # images, and stop attaching them for the rest of this process.
-            self.supports_vision = False
-            data = self._request(
-                "/chat/completions", {**payload, "messages": self._wire(messages, system)}
-            )
 
         result = _decode_response(data)
         if stream is not None and result.text:
@@ -119,6 +145,13 @@ class OpenAIProvider:
         for message in messages:
             wire.extend(_encode_message(message, supports_vision=self.supports_vision))
         return wire
+
+    def _has_no_tools(self, error: Exception) -> bool:
+        """True when the backend refused because it has no function calling."""
+        if self.tool_dialect != "auto":
+            return False
+        text = f"{error} {getattr(error, 'detail', '')}".lower()
+        return any(marker in text for marker in TOOLLESS_MARKERS)
 
     def _went_blind(self, error: Exception) -> bool:
         """True when the model refused specifically because it cannot see."""
@@ -155,6 +188,31 @@ BLIND_NOTE = (
     "[screenshot omitted: this model cannot see images — read the screen with "
     "`ocr_read`, or the window's contents with `ui_snapshot`]"
 )
+
+
+def as_openai_tools(tools: list[dict]) -> list[dict]:
+    """Whatever shape the caller had, in the shape this API documents.
+
+    The agent describes its tools once, in Anthropic's dialect, and every
+    provider translates. Forwarding that verbatim happened to work against
+    OpenRouter, which normalises it — and would have meant no tools at all
+    against anything that reads the spec strictly.
+    """
+    out: list[dict] = []
+    for tool in tools:
+        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+            out.append(tool)
+            continue
+        out.append({
+            "type": "function",
+            "function": {
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema") or tool.get("parameters")
+                              or {"type": "object", "properties": {}},
+            },
+        })
+    return out
 
 
 def _encode_message(message: Message, *, supports_vision: bool) -> list[dict]:
@@ -230,17 +288,33 @@ def _decode_response(data: dict) -> TurnResult:
     raw_message = choice.get("message") or {}
     blocks: list = []
 
+    # DeepSeek's reasoning models, and anything OpenRouter proxies from them,
+    # put the chain of thought in its own field. Dropping it loses the part of
+    # the answer that explains the rest.
+    reasoning = raw_message.get("reasoning_content") or raw_message.get("reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        blocks.append(ThinkingBlock(reasoning))
+
     content = raw_message.get("content")
+    text = ""
     if isinstance(content, str) and content:
-        blocks.append(TextBlock(content))
+        text = content
     elif isinstance(content, list):
-        blocks.extend(
-            TextBlock(part.get("text", ""))
+        text = "".join(
+            part.get("text", "")
             for part in content
             if isinstance(part, dict) and part.get("type") == "text"
         )
 
-    for index, call in enumerate(raw_message.get("tool_calls") or []):
+    native = raw_message.get("tool_calls") or []
+    # Models without native function calling — Hermes, Qwen, most things served
+    # straight off Ollama — write the call into the text instead. Read as prose
+    # it looks like the model claiming it already acted, and the run stalls.
+    text, written = toolcall_text.parse(text, start=len(native))
+    if text:
+        blocks.append(TextBlock(text))
+
+    for index, call in enumerate(native):
         function = call.get("function") or {}
         raw_args = function.get("arguments") or "{}"
         try:
@@ -250,6 +324,8 @@ def _decode_response(data: dict) -> TurnResult:
         blocks.append(
             ToolCall(id=call.get("id") or f"call_{index}", name=function.get("name", ""), input=parsed)
         )
+
+    blocks.extend(written)
 
     usage_raw = data.get("usage") or {}
     # Several OpenAI-compatible hosts cache the prompt automatically and report
@@ -264,9 +340,10 @@ def _decode_response(data: dict) -> TurnResult:
     # whoever answered, so the cost line is not double-counted on one of them.
     prompt = int(usage_raw.get("prompt_tokens", 0))
     finish = choice.get("finish_reason") or "end_turn"
+    calling = finish == "tool_calls" or bool(written)
     return TurnResult(
         message=Message("assistant", blocks),
-        stop_reason="tool_use" if finish == "tool_calls" else finish,
+        stop_reason="tool_use" if calling else finish,
         usage=Usage(
             input_tokens=max(prompt - cached, 0),
             output_tokens=int(usage_raw.get("completion_tokens", 0)),

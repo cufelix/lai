@@ -173,6 +173,8 @@ def _apply_overrides(config, args):
     desktop = config.desktop
     if getattr(args, "watch", False):
         desktop = replace(desktop, watch=True)
+    elif getattr(args, "unwatched", False):
+        desktop = replace(desktop, watch=False)
 
     return config.with_overrides(
         provider=provider, safety=safety, limits=limits, desktop=desktop
@@ -1281,9 +1283,14 @@ def build_parser() -> argparse.ArgumentParser:
             "--here", action="store_true",
             help="Work on your desktop instead — for tasks about the windows you have open",
         )
-        p.add_argument(
+        watching = p.add_mutually_exclusive_group()
+        watching.add_argument(
             "--watch", action="store_true",
-            help="Show the agent's screen in a window, so you can see what it is doing",
+            help="Show the agent's screen in a window, so you can see it work (the default)",
+        )
+        watching.add_argument(
+            "--unwatched", action="store_true",
+            help="Keep the agent's screen off-screen entirely",
         )
         p.add_argument("--verbose", "-v", action="store_true")
 

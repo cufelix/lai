@@ -273,3 +273,68 @@ def test_a_display_somebody_else_changed_is_left_alone(monkeypatch):
     os.environ["DISPLAY"] = ":1"  # a second screen started after this one
     screen.stop()
     assert os.environ["DISPLAY"] == ":1"
+
+
+# -- a window you can glance at, not one that grabs you ------------------
+
+
+def test_the_watch_window_does_not_take_your_keyboard(monkeypatch):
+    """Xephyr grabs the keyboard and mouse the moment the pointer crosses in,
+    which turns "I want to watch it" into "it took my keyboard again"."""
+    from lai.osl.virtual import _server_command
+
+    command = _server_command("Xephyr", ":90", (1280, 800), 24)
+    assert "-no-host-grab" in command
+
+
+def test_the_watch_window_draws_its_own_pointer(monkeypatch):
+    """It genuinely has its own mouse; this is what makes that visible."""
+    from lai.osl.virtual import _server_command
+
+    assert "-sw-cursor" in _server_command("Xephyr", ":90", (1280, 800), 24)
+
+
+def test_the_watch_window_says_what_it_is(monkeypatch):
+    from lai.osl.virtual import WATCH_CLASS, _server_command
+
+    command = _server_command("Xephyr", ":90", (1280, 800), 24)
+    title = command[command.index("-title") + 1]
+    assert "minimise" in title.lower()
+    assert command[command.index("-name") + 1] == WATCH_CLASS
+
+
+def test_the_off_screen_server_carries_none_of_that():
+    from lai.osl.virtual import _server_command
+
+    command = _server_command("Xvfb", ":90", (1920, 1080), 24)
+    assert "-no-host-grab" not in command and "-title" not in command
+
+
+def test_focus_goes_back_where_it_was(monkeypatch):
+    """A window appearing takes your focus mid-sentence. Once is forgivable;
+    once per task is not."""
+    focused = []
+
+    class FakeWindows:
+        def active_window(self):
+            return type("W", (), {"id": 4242})()
+
+        def focus(self, window_id):
+            focused.append(window_id)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("lai.osl.windows.WindowManager", lambda *a, **k: FakeWindows())
+    _fake_start(monkeypatch)
+    VirtualDisplay(display=":90", server="Xephyr").start()
+    assert focused == [4242]
+
+
+def test_the_off_screen_server_does_not_touch_your_focus(monkeypatch):
+    def explode(*args, **kwargs):
+        pytest.fail("nothing appeared, so nothing needs handing back")
+
+    monkeypatch.setattr("lai.osl.windows.WindowManager", explode)
+    _fake_start(monkeypatch)
+    VirtualDisplay(display=":90", server="Xvfb").start()

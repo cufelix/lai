@@ -327,6 +327,7 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
             timeout=config.timeout,
             name=name,
             supports_vision=name != "ollama" or bool(re.search(r"-vl|vision|llava", model, re.I)),
+            tool_dialect=getattr(config, "tool_dialect", "auto"),
         )
     if name.startswith("cli:") or name in _cli_names():
         from .cli_agent import CLIAgentProvider  # noqa: PLC0415
@@ -357,6 +358,7 @@ def _instantiate(name: str, config: ProviderConfig, credential: Credential | Non
             timeout=config.timeout,
             name=name,
             supports_vision=vendor.vision,
+            tool_dialect=getattr(config, "tool_dialect", "auto"),
         )
 
     raise ProviderError(

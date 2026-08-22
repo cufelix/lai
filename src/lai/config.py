@@ -57,6 +57,15 @@ class ProviderConfig:
     temperature: float = 1.0
     thinking_budget: int = 0
     timeout: float = 180.0
+    tool_dialect: str = "auto"
+    """How tools are offered to the model.
+
+    ``auto`` sends them as function definitions and falls back to writing them
+    into the prompt if the backend says it has no function calling. ``native``
+    never falls back; ``text`` always asks in the prompt, which is what models
+    like Hermes and Qwen were trained for and what most local servers can
+    actually do.
+    """
     prompt_cache: bool = True
     """Ask the backend to cache the unchanging prefix of each request.
 
@@ -150,11 +159,13 @@ class DesktopConfig:
     display: str = ""
     own_display: str = "auto"
     """Whether to give the agent a display of its own — see OWN_DISPLAY_MODES."""
-    watch: bool = False
+    watch: bool = True
     """Draw the agent's screen in a window on yours, instead of off-screen.
 
-    Costs a nested X server (Xephyr) and a window you have to look at, and buys
-    you seeing exactly what it is doing. Worth it the first few times.
+    Costs a nested X server (Xephyr) and a window on your desktop, and buys you
+    seeing exactly what it is doing. An agent working somewhere you cannot see
+    is one you have to trust rather than supervise, so this is on by default;
+    `watch = false` puts it back off-screen.
     """
     virtual_width: int = 1920
     virtual_height: int = 1080
@@ -404,6 +415,7 @@ def load_config(
         thinking_budget=int(env.get("LAI_THINKING", provider_data.get("thinking_budget", 0))),
         timeout=float(provider_data.get("timeout", 180.0)),
         prompt_cache=_bool(env.get("LAI_PROMPT_CACHE"), provider_data.get("prompt_cache", True)),
+        tool_dialect=str(provider_data.get("tool_dialect", "auto")).strip().lower(),
         deny=_tuple(env.get("LAI_DENY") or provider_data.get("deny"), ()),
         fallback=_fallback_chain(env, provider_data),
     )
@@ -440,7 +452,7 @@ def load_config(
         annotate_screenshots=bool(desktop_data.get("annotate_screenshots", False)),
         display=env.get("LAI_DISPLAY", desktop_data.get("display", "")),
         own_display=str(desktop_data.get("own_display", "auto")).strip().lower(),
-        watch=bool(desktop_data.get("watch", False)),
+        watch=bool(desktop_data.get("watch", True)),
         virtual_width=int(desktop_data.get("virtual_width", 1920)),
         virtual_height=int(desktop_data.get("virtual_height", 1080)),
     )
