@@ -7,8 +7,6 @@ come across, and that is the part that mattered.
 
 from __future__ import annotations
 
-import pytest
-
 from lai.osl.handover import Handoff, collect, deliver
 
 

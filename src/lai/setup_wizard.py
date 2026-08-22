@@ -132,16 +132,21 @@ def run_setup(
     # 1. What is missing, and can we fix it?
     out.write("[bold]1/4  Checking this machine[/bold]")
     report = _probe(config)
-    _render(out, report)
+    _render_summary(out, report)
 
-    repairs = [c for c in report if c.status != OK and c.fix is not None]
+    # The config file is written by step 3; reporting it as a problem here,
+    # and telling somebody to run the command they are already running, is not
+    # a finding.
+    repairs = [
+        check for check in report
+        if check.status != OK and check.fix is not None and check.key != "config"
+    ]
     if repairs:
         out.write("")
         _repair(out, prompt, repairs, answers)
         report = _probe(config)
         out.write("")
-        out.write("[bold]After fixes:[/bold]")
-        _render(out, report)
+        _render_changes(out, repairs, report)
 
     # 2. A model to think with.
     out.write("")
@@ -183,7 +188,10 @@ def _probe(config: Config) -> Report:
     try:
         from .runtime import build_runtime  # noqa: PLC0415
 
-        runtime = build_runtime(config, with_mcp=False)
+        # Explicitly the human's desktop: setup reports on the machine they
+        # are sitting at, and starting a second X server to do it would report
+        # on an empty one — and put DISPLAY=:90 in the first line they read.
+        runtime = build_runtime(config, with_mcp=False, virtual=False)
         return run_checks(runtime, config)
     except Exception:
         return run_checks(None, config)
@@ -233,6 +241,38 @@ def _repair(out, prompt: Prompt, repairs: list[Check], answers: Answers) -> None
         out.write(f"  {icon} [bold]{check.label}[/bold]: {check.detail}")
         for line in (fix.manual or fix.description).splitlines():
             out.write(f"    [dim]{line}[/dim]")
+
+
+def _render_summary(out, report: Report) -> None:
+    """What is wrong, and a count of what is not.
+
+    Fourteen green ticks is a wall of text that says "nothing to do here" in
+    the most expensive possible way, and it is the first thing a new user
+    reads. The things that need attention are the report; the rest is a number.
+    """
+    # The config file is written two steps from now. Reporting its absence as
+    # a finding, in the wizard whose job is to create it, is not a finding.
+    problems = [check for check in report if check.status != OK and check.key != "config"]
+    passed = len(list(report)) - len(problems)
+    if passed:
+        out.write(f"  [green]✓[/green] {passed} checks passed [dim]— `lai doctor` lists them[/dim]")
+    if problems:
+        _render(out, Report(problems))
+
+
+def _render_changes(out, repaired: list[Check], report: Report) -> None:
+    """Only what the repairs actually moved.
+
+    Reprinting the whole checklist after fixing one thing buries the answer to
+    the only question being asked: did the fix work?
+    """
+    keys = {check.key for check in repaired}
+    after = [check for check in report if check.key in keys]
+    if not after:
+        return
+    out.write("[bold]After fixes:[/bold]")
+    for check in after:
+        _render(out, Report([check]))
 
 
 def _setup_provider(out, prompt: Prompt, report: Report, answers: Answers) -> dict:
@@ -478,7 +518,10 @@ def _run_demo(out, prompt: Prompt, answers: Answers) -> None:
             safety=replace(config.safety, mode="readonly"),
             limits=replace(config.limits, max_steps=6, max_seconds=120.0),
         )
-        runtime = build_runtime(config, with_mcp=False)
+        # Explicitly the human's desktop: setup reports on the machine they
+        # are sitting at, and starting a second X server to do it would report
+        # on an empty one — and put DISPLAY=:90 in the first line they read.
+        runtime = build_runtime(config, with_mcp=False, virtual=False)
     except Exception as exc:
         out.write(f"  [red]could not start:[/red] {exc}")
         return
@@ -521,11 +564,21 @@ def _finish(out, config: Config, answers: Answers) -> tuple[int, Answers]:
                 for line in check.fix.manual.splitlines():
                     out.write(f"      [dim]{line}[/dim]")
 
+    # The one behaviour that surprises people, said before it surprises them:
+    # applications open somewhere they were not expecting.
+    out.write("")
+    out.write("[bold]One thing to know:[/bold]")
+    out.write("  It works on a [bold]desktop of its own[/bold], shown in a window titled")
+    out.write("  [dim]\"LAI — the agent's screen\". Minimise it and it keeps working; nothing[/dim]")
+    out.write("  [dim]it does touches your windows. When a task ends, the pages and files[/dim]")
+    out.write("  [dim]it produced open on your desktop.[/dim]")
+
     out.write("")
     out.write("[bold]Try this:[/bold]")
     for command, purpose in (
-        ("lai", "the full-screen interface"),
+        ("lai", "chat with it"),
         ('lai do "open the calculator"', "one task, right now"),
+        ('lai do "..." --here', "on your own desktop instead"),
         ("lai doctor", "re-check this machine"),
     ):
         out.write(f"  [cyan]{command:<30}[/cyan] [dim]{purpose}[/dim]")

@@ -769,3 +769,87 @@ def test_openrouter_is_offered_during_onboarding():
     assert "openrouter" in names
     signup = next(entry[2] for entry in BACKENDS if entry[0] == "openrouter")
     assert signup.startswith("https://")
+
+
+# -- the first thing a new user reads ------------------------------------
+
+
+def test_the_checklist_is_a_number_not_a_wall(capsys):
+    """Fourteen green ticks says "nothing to do here" in the most expensive
+    possible way, and it is the first screen anybody sees."""
+    from lai.checks import FAIL, OK, Check, Report
+    from lai.cli import Out
+    from lai.setup_wizard import _render_summary
+
+    report = Report([
+        Check("a", "display server", OK, "x11"),
+        Check("b", "clipboard", OK, "available"),
+        Check("c", "input", FAIL, "xdotool is not installed"),
+    ])
+    _render_summary(Out(color=False), report)
+    text = capsys.readouterr().out
+    assert "2 checks passed" in text
+    assert "xdotool is not installed" in text
+    assert "clipboard" not in text, "a passing check is a number, not a line"
+
+
+def test_the_wizard_does_not_report_the_file_it_is_about_to_write(capsys):
+    from lai.checks import OK, WARN, Check, Report
+    from lai.cli import Out
+    from lai.setup_wizard import _render_summary
+
+    report = Report([
+        Check("display", "display server", OK, "x11"),
+        Check("config", "configuration", WARN, "does not exist yet"),
+    ])
+    _render_summary(Out(color=False), report)
+    text = capsys.readouterr().out
+    assert "does not exist yet" not in text
+    assert "2 checks passed" in text
+
+
+def test_only_what_the_fixes_moved_is_reprinted(capsys):
+    from lai.checks import FAIL, OK, Check, Report
+    from lai.cli import Out
+    from lai.setup_wizard import _render_changes
+
+    repaired = [Check("input", "input", FAIL, "missing")]
+    after = Report([
+        Check("input", "input", OK, "available"),
+        Check("clipboard", "clipboard", OK, "available"),
+    ])
+    _render_changes(Out(color=False), repaired, after)
+    text = capsys.readouterr().out
+    assert "input" in text
+    assert "clipboard" not in text
+
+
+def test_setup_never_starts_a_second_x_server(monkeypatch):
+    """It reports on the machine somebody is sitting at. Starting its own
+    would report on an empty screen — and put DISPLAY=:90 in the first line
+    they read."""
+    seen = {}
+
+    def fake_build(config, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr("lai.runtime.build_runtime", fake_build)
+    from lai.config import load_config
+    from lai.setup_wizard import _probe
+
+    _probe(load_config())
+    assert seen["virtual"] is False
+
+
+def test_the_finish_explains_the_separate_desktop(capsys):
+    """Applications opening somewhere you were not expecting is the one thing
+    that surprises people. Say it before it happens."""
+    from lai.cli import Out
+    from lai.config import load_config
+    from lai.setup_wizard import Answers, _finish
+
+    _finish(Out(color=False), load_config(), Answers(fixed=[], skipped=[]))
+    text = capsys.readouterr().out
+    assert "desktop of its own" in text
+    assert "--here" in text

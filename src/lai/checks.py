@@ -455,8 +455,8 @@ def check_virtual_display() -> Check:
 
     found = available()
     if "Xvfb" in found:
-        return Check("virtual", "own screen (Xvfb)", OK,
-                     "the agent works off-screen; your desktop is its own", required=False)
+        return Check("virtual", "own screen", OK,
+                     "the agent gets a desktop of its own; yours is untouched", required=False)
     if found:
         return Check(
             "virtual", "own screen", WARN,
@@ -490,7 +490,7 @@ def check_config(config) -> Check:
         return Check("config", "configuration", OK, str(path), required=False)
     return Check(
         "config", "configuration", WARN, f"{path} does not exist yet — defaults are in use",
-        fix=Fix("write a starter config", manual="Run `lai setup`."),
+        fix=Fix("write a starter config", manual="`lai setup` writes one."),
         required=False,
     )
 
