@@ -678,3 +678,13 @@ def test_no_cache_no_noise():
     from lai.cli import _usage_line
 
     assert "cache" not in _usage_line(Usage(input_tokens=10, output_tokens=5))
+
+
+def test_a_model_that_cannot_see_says_so_once(capsys):
+    """Silently dropping screenshots would leave someone watching the run
+    wondering why it stopped looking at the screen."""
+    report = _make_reporter(Out(color=False), stream=False, verbose=False)
+    report("no_vision", {"model": "z-ai/glm-4.6"})
+    text = capsys.readouterr().out
+    assert "cannot see images" in text and "z-ai/glm-4.6" in text
+    assert "OCR" in text

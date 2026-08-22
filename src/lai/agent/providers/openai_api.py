@@ -28,6 +28,22 @@ from .base import (
 RETRY_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
 MAX_RETRIES = 4
 
+BLIND_MARKERS = (
+    "no endpoints found that support image input",
+    "does not support image",
+    "image input is not supported",
+    "image_url is not supported",
+    "vision is not supported",
+    "invalid content type: image",
+)
+"""How the various hosts say "this model cannot see".
+
+Vision is a per-model fact, and a router like OpenRouter serves hundreds of
+models behind one endpoint that does support images in general. Guessing at
+build time would need a network round trip before the first token; discovering
+it from the refusal costs one wasted call, once, and then the run continues.
+"""
+
 
 class OpenAIProvider:
     """Chat-completions with function tools."""
@@ -66,11 +82,7 @@ class OpenAIProvider:
         tools: list[dict] | None = None,
         stream: StreamCallback | None = None,
     ) -> TurnResult:
-        wire: list[dict] = []
-        if system:
-            wire.append({"role": "system", "content": system})
-        for message in messages:
-            wire.extend(_encode_message(message, supports_vision=self.supports_vision))
+        wire = self._wire(messages, system)
 
         payload: dict = {
             "model": self.model,
@@ -82,11 +94,38 @@ class OpenAIProvider:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        data = self._request("/chat/completions", payload)
+        try:
+            data = self._request("/chat/completions", payload)
+        except ProviderError as exc:
+            if not self._went_blind(exc):
+                raise
+            # Losing the run over a screenshot would be absurd when the text of
+            # the conversation is still perfectly usable. Re-send without the
+            # images, and stop attaching them for the rest of this process.
+            self.supports_vision = False
+            data = self._request(
+                "/chat/completions", {**payload, "messages": self._wire(messages, system)}
+            )
+
         result = _decode_response(data)
         if stream is not None and result.text:
             stream("text", result.text)
         return result
+
+    def _wire(self, messages: list[Message], system: str) -> list[dict]:
+        wire: list[dict] = []
+        if system:
+            wire.append({"role": "system", "content": system})
+        for message in messages:
+            wire.extend(_encode_message(message, supports_vision=self.supports_vision))
+        return wire
+
+    def _went_blind(self, error: Exception) -> bool:
+        """True when the model refused specifically because it cannot see."""
+        if not self.supports_vision:
+            return False
+        text = f"{error} {getattr(error, 'detail', '')}".lower()
+        return any(marker in text for marker in BLIND_MARKERS)
 
     def _request(self, path: str, payload: dict) -> dict:
         last_error = ""
@@ -112,6 +151,12 @@ class OpenAIProvider:
         raise ProviderError(f"{self.name}: failed after {MAX_RETRIES} attempts", detail=last_error)
 
 
+BLIND_NOTE = (
+    "[screenshot omitted: this model cannot see images — read the screen with "
+    "`ocr_read`, or the window's contents with `ui_snapshot`]"
+)
+
+
 def _encode_message(message: Message, *, supports_vision: bool) -> list[dict]:
     """One neutral Message can become several OpenAI messages (tool results split out)."""
     out: list[dict] = []
@@ -131,7 +176,7 @@ def _encode_message(message: Message, *, supports_vision: bool) -> list[dict]:
                     }
                 )
             else:
-                parts.append({"type": "text", "text": "[screenshot omitted: model has no vision]"})
+                parts.append({"type": "text", "text": BLIND_NOTE})
         elif isinstance(block, ThinkingBlock):
             continue  # not representable on this API
         elif isinstance(block, ToolCall):
@@ -144,8 +189,11 @@ def _encode_message(message: Message, *, supports_vision: bool) -> list[dict]:
             )
         elif isinstance(block, ToolResultBlock):
             content = block.content or "(no output)"
-            if block.images and supports_vision:
-                content += f"\n[{len(block.images)} screenshot(s) attached in the next message]"
+            if block.images:
+                content += (
+                    f"\n[{len(block.images)} screenshot(s) attached in the next message]"
+                    if supports_vision else f"\n{BLIND_NOTE}"
+                )
             out.append({"role": "tool", "tool_call_id": block.tool_use_id, "content": content})
             if block.images and supports_vision:
                 out.append(

@@ -310,3 +310,22 @@ def test_a_broken_skill_registry_costs_nothing():
             raise RuntimeError("skills directory vanished")
 
     assert skills_block(Broken(), "anything") == ""
+
+
+# -- a model with no eyes ------------------------------------------------
+
+
+def test_the_prompt_says_nothing_about_vision_when_there_is_vision():
+    from lai.agent.prompt import build_system_prompt
+
+    assert "cannot see" not in build_system_prompt()
+
+
+def test_a_blind_model_is_told_up_front_and_pointed_at_ocr():
+    """Discovering it from a failed screenshot mid-run costs a wasted call and,
+    worse, leaves the model clicking buttons it has no way to check."""
+    from lai.agent.prompt import build_system_prompt
+
+    prompt = build_system_prompt(vision=False)
+    assert "You cannot see" in prompt
+    assert "ocr_read" in prompt and "ui_snapshot" in prompt

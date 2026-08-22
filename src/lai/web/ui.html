@@ -675,6 +675,10 @@
       case "repeating":
         put(el("div", "note switch", `↺ refused a repeated ${event.name} — it failed the same way twice`));
         break;
+      case "no_vision":
+        put(el("div", "note switch",
+          `◌ ${event.model || "this model"} cannot see images — reading the screen with OCR instead`));
+        break;
       case "yielding":
         put(el("div", "note switch", "⏸ you are using the machine — waiting for you to finish"));
         break;

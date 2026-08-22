@@ -53,7 +53,7 @@ _WINDOW_TARGET = {
 # -- shared engines, one per session (see module docstring) ----------------
 
 
-def _ocr_engine(ctx: ToolContext) -> OCREngine:
+def ocr_engine(ctx: ToolContext) -> OCREngine:
     return ctx.extra.setdefault("ocr_engine", OCREngine())
 
 
@@ -121,7 +121,7 @@ def register(registry: ToolRegistry) -> None:
             region = _region_from_args(ctx.desktop, args)
         except (KeyError, TypeError, ValueError):
             return ToolResult.failure("region must be an object with x, y, width, height")
-        engine = _ocr_engine(ctx)
+        engine = ocr_engine(ctx)
         result = engine.read(region, min_confidence=args.get("min_confidence"))
         if not result.words:
             return ToolResult.text("No text recognised in that region.", **result.to_dict())
@@ -160,7 +160,7 @@ def register(registry: ToolRegistry) -> None:
             region = _region_from_args(ctx.desktop, args)
         except (KeyError, TypeError, ValueError):
             return ToolResult.failure("region must be an object with x, y, width, height")
-        engine = _ocr_engine(ctx)
+        engine = ocr_engine(ctx)
         limit = int(args.get("limit", 10))
         matches = engine.find_text(
             args["query"], region, min_confidence=args.get("min_confidence"), limit=limit

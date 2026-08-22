@@ -221,6 +221,18 @@ def _rank_skills(available: list, task: str) -> tuple[list, int]:
     )
 
 
+NO_VISION = """# You cannot see
+This model has no vision. Screenshots will not reach you, so do not plan around
+looking at one. Read the screen instead:
+- `ui_snapshot` — the accessibility tree: exact widget names, states and
+  coordinates. Always try this first.
+- `ocr_read` — the pixels as text, for anything with no accessibility tree
+  (Chromium without --force-renderer-accessibility, games, canvases, VMs) and
+  for widgets that expose no readable name, such as a calculator's display.
+If a value you need is not in the accessibility tree, OCR it. Clicking the same
+buttons again will not make it appear."""
+
+
 def build_system_prompt(
     *,
     desktop=None,
@@ -230,6 +242,7 @@ def build_system_prompt(
     extra: str = "",
     knowledge: str = "",
     task: str = "",
+    vision: bool = True,
 ) -> str:
     sections = [
         IDENTITY,
@@ -238,6 +251,8 @@ def build_system_prompt(
     ]
     if safety is not None:
         sections.append(safety_block(safety))
+    if not vision:
+        sections.append(NO_VISION)
     skills_text = skills_block(skills, task)
     if skills_text:
         sections.append(skills_text)

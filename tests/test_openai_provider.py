@@ -14,6 +14,7 @@ from lai.agent.providers.base import (
     ToolResultBlock,
 )
 from lai.agent.providers.openai_api import OpenAIProvider, _decode_response, _encode_message
+from lai.errors import ProviderError
 
 PNG = b"\x89PNGfake"
 
@@ -232,3 +233,74 @@ def test_a_null_details_block_is_not_a_crash():
         "usage": {"prompt_tokens": 11, "prompt_tokens_details": None},
     })
     assert turn.usage.input_tokens == 11
+
+
+# -- a model that turns out to have no eyes ------------------------------
+
+
+class Recorder:
+    """Stands in for the HTTP layer: fails the first call, then answers."""
+
+    def __init__(self, *, fail_times: int, message: str):
+        self.calls: list[dict] = []
+        self.fail_times = fail_times
+        self.message = message
+
+    def __call__(self, path, payload):
+        self.calls.append(payload)
+        if len(self.calls) <= self.fail_times:
+            raise ProviderError(self.message)
+        return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+
+def blind_provider(recorder) -> OpenAIProvider:
+    provider = OpenAIProvider(api_key="k", model="z-ai/glm-4.6", name="openrouter")
+    provider._request = recorder
+    return provider
+
+
+def screenshot_turn() -> list:
+    from lai.agent.providers.base import ToolResultBlock
+
+    return [Message("user", [ToolResultBlock("call_1", "a screenshot", images=[b"\x89PNG"])])]
+
+
+def test_a_model_that_cannot_see_is_retried_without_the_picture():
+    """Losing a run over a screenshot is absurd when the conversation is fine."""
+    recorder = Recorder(
+        fail_times=1,
+        message='openrouter: HTTP 404 ({"error":{"message":"No endpoints found that support image input"}})',
+    )
+    provider = blind_provider(recorder)
+    assert provider.complete(screenshot_turn()).text == "ok"
+
+    assert len(recorder.calls) == 2
+    assert "image_url" in json.dumps(recorder.calls[0])
+    assert "image_url" not in json.dumps(recorder.calls[1])
+    assert "cannot see images" in json.dumps(recorder.calls[1])
+
+
+def test_it_stops_attaching_images_for_the_rest_of_the_process():
+    """Vision is a per-model fact behind a router that supports it in general;
+    once discovered it must not be rediscovered every turn."""
+    recorder = Recorder(fail_times=1, message="No endpoints found that support image input")
+    provider = blind_provider(recorder)
+    provider.complete(screenshot_turn())
+    provider.complete(screenshot_turn())
+    assert len(recorder.calls) == 3, "only the first turn pays for the discovery"
+    assert provider.supports_vision is False
+
+
+def test_an_ordinary_failure_is_not_mistaken_for_blindness():
+    recorder = Recorder(fail_times=2, message="openrouter: HTTP 401 unauthorized")
+    provider = blind_provider(recorder)
+    with pytest.raises(ProviderError, match="401"):
+        provider.complete(screenshot_turn())
+    assert len(recorder.calls) == 1, "no point re-sending a request that was not about images"
+    assert provider.supports_vision is True
+
+
+def test_a_second_refusal_is_not_swallowed():
+    recorder = Recorder(fail_times=2, message="No endpoints found that support image input")
+    with pytest.raises(ProviderError, match="image input"):
+        blind_provider(recorder).complete(screenshot_turn())

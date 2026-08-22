@@ -441,3 +441,79 @@ def test_a_failure_detail_is_folded_in_too():
 def test_a_hint_already_in_the_message_is_not_repeated():
     result = ToolResult.failure("run `lai setup` to fix this", hint="run `lai setup` to fix this")
     assert result.content.count("lai setup") == 1
+
+
+# -- a screenshot for a model that cannot see ----------------------------
+
+
+class FakeScreen:
+    """Just enough desktop to take a screenshot of."""
+
+    def grab(self, region=None, **kwargs):
+        from lai.osl.screen import Rect
+
+        return type("Shot", (), {
+            "region": Rect(0, 0, 800, 600), "size": (800, 600), "scale": 1.0,
+            "png": b"\x89PNG", "to_dict": lambda self: {"width": 800},
+        })()
+
+    def virtual_bounds(self):
+        from lai.osl.screen import Rect
+
+        return Rect(0, 0, 800, 600)
+
+
+class FakeDesktop:
+    screen = FakeScreen()
+    windows = type("W", (), {"active_window": lambda self: None})()
+    last_snapshot = None
+
+
+def screenshot_registry() -> ToolRegistry:
+    from lai.tools.computer import register as register_computer
+
+    reg = ToolRegistry()
+    register_computer(reg)
+    return reg
+
+
+def test_a_screenshot_becomes_text_when_the_model_has_no_vision():
+    """An image a model cannot open is a dead end. Reading it out loud is not."""
+
+    class Words:
+        text = "137 x 24 = 3288"
+        words = ["137", "x", "24", "=", "3288"]
+
+    class Engine:
+        def read(self, region, **kwargs):
+            return Words()
+
+    ctx = ToolContext(desktop=FakeDesktop(), extra={"vision": False, "ocr_engine": Engine()})
+    result = screenshot_registry().call("computer_screenshot", {"scope": "desktop"}, ctx)
+    assert result.ok
+    assert result.images == [], "sending an image it cannot read wastes the turn"
+    assert "3288" in result.content
+    assert "cannot see images" in result.content
+
+
+def test_a_seeing_model_still_gets_the_picture():
+    ctx = ToolContext(desktop=FakeDesktop(), extra={"vision": True})
+    result = screenshot_registry().call("computer_screenshot", {"scope": "desktop"}, ctx)
+    assert result.ok and result.images == [b"\x89PNG"]
+
+
+def test_vision_is_assumed_when_nobody_said_otherwise():
+    ctx = ToolContext(desktop=FakeDesktop(), extra={})
+    assert screenshot_registry().call("computer_screenshot", {}, ctx).images
+
+
+def test_no_ocr_available_says_what_to_do_instead():
+    class Broken:
+        def read(self, region, **kwargs):
+            raise RuntimeError("tesseract is not installed")
+
+    ctx = ToolContext(desktop=FakeDesktop(), extra={"vision": False, "ocr_engine": Broken()})
+    result = screenshot_registry().call("computer_screenshot", {"scope": "desktop"}, ctx)
+    assert result.ok
+    assert "ui_snapshot" in result.content
+    assert "tesseract is not installed" in result.content

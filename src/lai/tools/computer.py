@@ -16,6 +16,29 @@ _COORD = {
 }
 
 
+def _read_for_a_blind_model(ctx: ToolContext, region) -> str:
+    """The screen as text, for a model that cannot be shown the picture."""
+    from .perception import ocr_engine  # noqa: PLC0415
+
+    try:
+        engine = ocr_engine(ctx)
+        result = engine.read(region)
+    except Exception as exc:
+        return (
+            "This model cannot see images and OCR is unavailable "
+            f"({type(exc).__name__}: {exc}). Read the window with `ui_snapshot` instead."
+        )
+    if not result.words:
+        return (
+            "This model cannot see images, and OCR found no text here. "
+            "Read the window with `ui_snapshot` instead."
+        )
+    return (
+        "This model cannot see images, so the screen was read with OCR instead "
+        f"({len(result.words)} word(s)):\n{result.text}"
+    )
+
+
 def register(registry: ToolRegistry) -> None:
     @registry.tool(
         "computer_screenshot",
@@ -95,6 +118,14 @@ def register(registry: ToolRegistry) -> None:
         ]
         if active:
             lines.append(f"Focused window: {active.title!r} [{active.wm_class}] at {active.bounds.as_tuple()}")
+
+        # A model with no vision gets an image it cannot open, and the run
+        # stalls somewhere it has no way to see out of. Reading the pixels for
+        # it turns a dead end back into an observation.
+        if not (ctx.extra or {}).get("vision", True):
+            lines.append(_read_for_a_blind_model(ctx, shot.region))
+            return ToolResult(ok=True, content="\n".join(lines), data=info)
+
         return ToolResult(ok=True, content="\n".join(lines), data=info, images=[shot.png])
 
     @registry.tool(

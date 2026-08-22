@@ -573,6 +573,11 @@ class LaiApp(App):
             bar.provider = f"{payload['to']}/{payload.get('model', '')}"
         elif kind == "repeating":
             self.write(f"[yellow]↺ refused a repeated {payload.get('name')}[/yellow]")
+        elif kind == "no_vision":
+            self.write(
+                f"[yellow]◌ {payload.get('model', 'this model')} cannot see images[/yellow] "
+                "[dim]— reading the screen with OCR instead[/dim]"
+            )
         elif kind == "yielding":
             self.write("[yellow]⏸ you are using the machine — waiting[/yellow]")
         elif kind == "resumed":

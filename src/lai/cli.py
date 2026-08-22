@@ -263,6 +263,13 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
                 f"[yellow]↺ refused a third identical {payload.get('name')} — "
                 "it failed the same way twice[/yellow]"
             )
+        elif kind == "no_vision":
+            halt()
+            out.write(
+                f"[yellow]◌ {payload.get('model', 'this model')} cannot see images[/yellow] "
+                "[dim]— reading the screen with OCR and the accessibility tree instead[/dim]"
+            )
+            spin()
         elif kind == "yielding":
             halt()
             out.write(

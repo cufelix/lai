@@ -220,3 +220,44 @@ def test_scores_separate_a_name_hit_from_a_prose_hit():
     assert scored[0][1][0] == "refund"
     assert scored[0][0] > scored[1][0]
     assert scored[1][0] == 1
+
+
+# -- the gate reaches the tools that need it -----------------------------
+
+
+def test_the_loop_hands_the_gate_to_tools_even_when_tool_extra_is_replaced():
+    """`tool_extra` is assembled by whoever built the agent and replaced
+    wholesale, so a gate stored once in __init__ never reaches `tool_find`."""
+    from lai.agent.loop import Agent
+
+    agent = Agent.__new__(Agent)
+    agent.desktop = agent.config = agent.policy = agent.audit = None
+    agent.session = agent.skills = agent.approver = None
+    agent.registry = ToolRegistry()
+    agent.cwd = None
+    agent.gate = ToolGate(agent.registry)
+    agent.provider = type("P", (), {"supports_vision": False})()
+    agent.tool_extra = {"memory_store": object()}  # as the runtime rebuilds it
+
+    context = agent._tool_context()
+    assert context.extra["tool_gate"] is agent.gate
+    assert context.extra["vision"] is False
+    assert "memory_store" in context.extra
+
+
+def test_the_context_dict_is_shared_so_tools_can_cache_between_steps():
+    """OCR engines and monitors live in `extra`; a fresh dict each step would
+    rebuild them every time."""
+    from lai.agent.loop import Agent
+
+    agent = Agent.__new__(Agent)
+    agent.desktop = agent.config = agent.policy = agent.audit = None
+    agent.session = agent.skills = agent.approver = None
+    agent.registry = ToolRegistry()
+    agent.cwd = None
+    agent.gate = ToolGate(agent.registry)
+    agent.provider = type("P", (), {"supports_vision": True})()
+    agent.tool_extra = {}
+
+    agent._tool_context().extra["ocr_engine"] = "expensive"
+    assert agent._tool_context().extra["ocr_engine"] == "expensive"

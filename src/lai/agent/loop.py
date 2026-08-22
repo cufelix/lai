@@ -149,9 +149,9 @@ class Agent:
         """Long-lived services (memory, scheduler, this agent) handed to tools."""
         self.gate = ToolGate(registry)
         """Decides which tool schemas this task is worth paying for."""
-        self.tool_extra["tool_gate"] = self.gate
         self._system_prompt: str = ""
         self._tool_schemas: list[dict] = []
+        self._told_blind = False
 
     # -- public ----------------------------------------------------------
 
@@ -215,6 +215,14 @@ class Agent:
                         f"token budget of {limits.max_tokens} exhausted", step - 1
                     )
                     break
+
+                if not getattr(self.provider, "supports_vision", True) and not self._told_blind:
+                    # Discovered mid-run: a router admits a model has no vision
+                    # only when it is first shown a picture. Saying so once is
+                    # what stops the next twenty steps being clicks in the dark.
+                    self._told_blind = True
+                    self._system_prompt = self._build_system_prompt(self.session.task)
+                    self._emit("no_vision", {"model": self.provider.model})
 
                 self.session.steps = step
                 # The context figures ride along with the step: an interface
@@ -371,6 +379,7 @@ class Agent:
             extra=extra,
             knowledge=self._knowledge_block(task or self.session.task or ""),
             task=task or self.session.task or "",
+            vision=bool(getattr(self.provider, "supports_vision", True)),
         )
 
     def _model_turn(self):
@@ -459,6 +468,13 @@ class Agent:
         return self._idle_probe
 
     def _tool_context(self) -> ToolContext:
+        # Refreshed rather than set once: `tool_extra` is assembled by whoever
+        # built this agent and replaced wholesale, and vision is a fact that can
+        # change mid-run — a router only admits a model cannot see when it is
+        # first shown a picture. The dict itself is shared on purpose: tools
+        # cache engines in it between steps.
+        self.tool_extra["tool_gate"] = self.gate
+        self.tool_extra["vision"] = bool(getattr(self.provider, "supports_vision", True))
         return ToolContext(
             desktop=self.desktop,
             config=self.config,
