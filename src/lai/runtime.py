@@ -103,6 +103,25 @@ class Runtime:
         }
         return agent
 
+    def hand_over(self, artifacts=()) -> tuple[list, str]:
+        """Reopen what the agent left, on the human's desktop.
+
+        Only meaningful when the agent had a screen of its own — otherwise the
+        windows are already in front of the person, and reopening them would be
+        a second copy of something they can see.
+        """
+        screen = self.virtual_display
+        if screen is None or not getattr(self.config.desktop, "handover", True):
+            return [], ""
+
+        from .osl.handover import collect, deliver  # noqa: PLC0415
+
+        try:
+            found = collect(self.desktop, artifacts=artifacts)
+        except Exception as exc:
+            return [], f"could not read the agent's screen: {exc}"
+        return deliver(found, display=getattr(screen, "host_display", ""))
+
     def close(self) -> None:
         for closer in (
             getattr(self.scheduler, "stop", None),

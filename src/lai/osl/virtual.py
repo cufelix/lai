@@ -94,7 +94,12 @@ class VirtualDisplay:
     _wm_process: object = field(default=None, repr=False)
     _started: bool = False
     _restore_display: object = field(default=None, repr=False)
-    """Whatever ``DISPLAY`` said before this server existed."""
+    """Whatever ``DISPLAY`` said before this server existed — the human's."""
+
+    @property
+    def host_display(self) -> str:
+        """The display the person is actually sitting in front of."""
+        return str(self._restore_display or "")
 
     @property
     def running(self) -> bool:

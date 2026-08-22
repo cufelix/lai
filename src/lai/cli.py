@@ -327,6 +327,24 @@ def _usage_line(usage) -> str:
     return " · ".join(parts)
 
 
+def _hand_over(out: Out, runtime, result, *, quiet: bool = False) -> None:
+    """Bring the work across to the human's desktop, and say what came.
+
+    An X window belongs to the display its client connected to, so the agent's
+    browser cannot be handed over — but the page it was showing can.
+    """
+    try:
+        opened, problem = runtime.hand_over(getattr(result, "artifacts", ()))
+    except Exception as exc:
+        opened, problem = [], str(exc)
+    if quiet:
+        return
+    for handoff in opened:
+        out.write(f"[green]→ opened on your desktop:[/green] [dim]{handoff.describe()}[/dim]")
+    if problem:
+        out.write(f"[dim]nothing handed over: {problem}[/dim]")
+
+
 def _no_provider(out: Out, runtime) -> int:
     """The most common wall a new user hits. Name the command that gets past it."""
     out.error(runtime.provider_error or "no model backend available")
@@ -352,6 +370,7 @@ def cmd_do(args) -> int:
             on_event=None if args.json else _make_reporter(out, stream=not args.no_stream, verbose=args.verbose),
         )
         result = agent.run(args.task)
+        _hand_over(out, runtime, result, quiet=args.json)
         if args.json:
             print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         else:

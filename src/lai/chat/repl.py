@@ -210,6 +210,7 @@ def run_chat(runtime, *, out=None, task: str = "", verbose: bool = False, resume
         try:
             result = agent.run(line)
             out.write(result.render())
+            _hand_over(out, runtime, result)
         except KeyboardInterrupt:
             agent.interrupt()
             out.write("\n[yellow]interrupted[/yellow]")
@@ -244,6 +245,22 @@ def _asker(out, reader: Reader):
         return int(answer) - 1
 
     return ask
+
+
+def _hand_over(out, runtime, result) -> None:
+    """Bring the work across to the human's desktop, and say what came.
+
+    An X window belongs to the display its client connected to, so the agent's
+    browser cannot be handed over — but the page it was showing can.
+    """
+    try:
+        opened, problem = runtime.hand_over(getattr(result, "artifacts", ()))
+    except Exception as exc:
+        opened, problem = [], str(exc)
+    for handoff in opened:
+        out.write(f"[green]→ opened on your desktop:[/green] [dim]{handoff.describe()}[/dim]")
+    if problem:
+        out.write(f"[dim]nothing handed over: {problem}[/dim]")
 
 
 def _start_web(out, runtime) -> str:

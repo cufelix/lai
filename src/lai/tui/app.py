@@ -524,11 +524,25 @@ class LaiApp(App):
             self.agent = agent
             result = agent.run(task)
             self.call_from_thread(self._finished, result)
+            self._hand_over(result)
         except Exception as exc:
             self.call_from_thread(self.write, f"[red]run failed: {type(exc).__name__}: {exc}[/red]")
         finally:
             self.agent = None
             self.call_from_thread(self._set_busy, False)
+
+    def _hand_over(self, result) -> None:
+        """The agent's windows die with its screen; what was in them need not."""
+        try:
+            opened, problem = self.runtime.hand_over(getattr(result, "artifacts", ()))
+        except Exception as exc:
+            opened, problem = [], str(exc)
+        for handoff in opened:
+            self.call_from_thread(
+                self.write, f"[green]→ opened on your desktop:[/green] [dim]{handoff.describe()}[/dim]"
+            )
+        if problem:
+            self.call_from_thread(self.write, f"[dim]nothing handed over: {problem}[/dim]")
 
     def _set_busy(self, busy: bool) -> None:
         bar = self.query_one(StatusBar)

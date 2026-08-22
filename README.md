@@ -564,6 +564,22 @@ needs `--here`; the agent is told this and will say so rather than guessing.
 `lai observe` always reports your desktop, because that is the whole point of
 the command.
 
+**When the run ends, the work comes to you.** An X window belongs to the
+display its client connected to — the agent's Firefox cannot cross to yours,
+and dies with the server. What was *in* it can:
+
+```
+✓ completed — 4 steps in 18s
+→ opened on your desktop: https://jspaint.app/#local:b1f7a5b7 (from firefox)
+→ opened on your desktop: /home/you/report.md
+```
+
+Pages the agent had open are read out of the address bar (matched on the value,
+so it works in any language) and files the run wrote are reopened, both through
+`xdg-open` on your display. Unsaved state in an editor is not reconstructed:
+that is gone when the server stops, and pretending otherwise would be worse
+than saying so. `[desktop] handover = false` turns it off.
+
 By default that screen is shown in a window on yours (Xephyr), so you can watch
 it work. The window is deliberately unobtrusive: it does not take focus when it
 appears — focus goes straight back to whatever you were typing into — and it

@@ -159,6 +159,13 @@ class DesktopConfig:
     display: str = ""
     own_display: str = "auto"
     """Whether to give the agent a display of its own — see OWN_DISPLAY_MODES."""
+    handover: bool = True
+    """When a run ends, reopen what it left on your desktop.
+
+    An X window cannot cross displays, so the agent's Firefox stays on the
+    agent's screen and dies with it. The page it was showing and the files it
+    wrote can come to you, and those are the part that mattered.
+    """
     watch: bool = True
     """Draw the agent's screen in a window on yours, instead of off-screen.
 
@@ -452,6 +459,7 @@ def load_config(
         annotate_screenshots=bool(desktop_data.get("annotate_screenshots", False)),
         display=env.get("LAI_DISPLAY", desktop_data.get("display", "")),
         own_display=str(desktop_data.get("own_display", "auto")).strip().lower(),
+        handover=bool(desktop_data.get("handover", True)),
         watch=bool(desktop_data.get("watch", True)),
         virtual_width=int(desktop_data.get("virtual_width", 1920)),
         virtual_height=int(desktop_data.get("virtual_height", 1080)),
