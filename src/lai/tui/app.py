@@ -373,6 +373,7 @@ class LaiApp(App):
         Binding("ctrl+r", "pick_session", "Resume"),
         Binding("ctrl+p", "command_palette", "Commands", priority=True),
         Binding("f2", "cycle_mode", "Cycle mode"),
+        Binding("f3", "toggle_detail", "Detail"),
         Binding("f5", "observe", "Observe"),
     ]
 
@@ -385,6 +386,8 @@ class LaiApp(App):
         self.pending: PendingApproval | None = None
         self._run_started = 0.0
         self._streaming = False
+        self.detailed = False
+        """Tool names and arguments instead of plain sentences (f3)."""
 
     # -- layout ----------------------------------------------------------
 
@@ -566,8 +569,11 @@ class LaiApp(App):
             self.write(payload.get("text", ""))
         elif kind == "tool_call":
             name = payload.get("name", "")
-            args = ", ".join(f"{k}={v!r}" for k, v in list(payload.get("input", {}).items())[:3])
-            self.write(f"[cyan]▸ {name}[/cyan] [dim]{args[:110]}[/dim]")
+            if self.detailed:
+                args = ", ".join(f"{k}={v!r}" for k, v in list(payload.get("input", {}).items())[:3])
+                self.write(f"[cyan]▸ {name}[/cyan] [dim]{args[:110]}[/dim]")
+            else:
+                self.write(f"[cyan]▸[/cyan] {payload.get('plain') or name}")
             self._streaming = False
             if name == "plan_update":
                 steps = payload.get("input", {}).get("steps", [])
@@ -575,12 +581,15 @@ class LaiApp(App):
                 self.query_one(PlanPanel).show([str(s) for s in steps], int(current))
         elif kind == "tool_result":
             ok = payload.get("ok")
+            if ok and not self.detailed:
+                return  # the step was already described; its own words add nothing
             mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
             summary = (payload.get("summary") or "").strip().splitlines()
             head = summary[0][:120] if summary else ""
             extra = f" [dim](+{len(summary) - 1} lines)[/dim]" if len(summary) > 1 else ""
             image = " [magenta]+img[/magenta]" if payload.get("images") else ""
-            self.write(f"  {mark} [dim]{head}[/dim]{extra}{image}")
+            colour = "dim" if ok else "red"
+            self.write(f"  {mark} [{colour}]{head}[/{colour}]{extra}{image}")
         elif kind == "provider_switch":
             self.write(
                 f"[yellow]↻ {payload['from']} stepped aside[/yellow] "
@@ -715,6 +724,11 @@ class LaiApp(App):
             self._resume(listing[index]["id"])
 
         self.push_screen(ChoiceScreen(pending), chosen)
+
+    def action_toggle_detail(self) -> None:
+        """Plain sentences, or the tool names underneath them."""
+        self.detailed = not self.detailed
+        self.write(f"[dim]showing {'tool names' if self.detailed else 'plain language'}[/dim]")
 
     def action_observe(self) -> None:
         try:

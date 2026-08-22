@@ -688,3 +688,44 @@ def test_a_model_that_cannot_see_says_so_once(capsys):
     text = capsys.readouterr().out
     assert "cannot see images" in text and "z-ai/glm-4.6" in text
     assert "OCR" in text
+
+
+# -- readable by somebody who is not a programmer -------------------------
+
+
+def test_a_step_is_described_in_words_not_in_json(capsys):
+    report = _make_reporter(Out(color=False), stream=False, verbose=False)
+    report("tool_call", {"name": "ui_click", "input": {"name": "3"}, "plain": "Clicked “3”"})
+    text = capsys.readouterr().out
+    assert "Clicked “3”" in text
+    assert "ui_click" not in text and "{" not in text
+
+
+def test_verbose_still_shows_the_tool_and_its_arguments(capsys):
+    """When something breaks, the tool name is the thing you need."""
+    report = _make_reporter(Out(color=False), stream=False, verbose=True)
+    report("tool_call", {"name": "ui_click", "input": {"name": "3"}, "plain": "Clicked “3”"})
+    text = capsys.readouterr().out
+    assert "ui_click" in text and '"name": "3"' in text
+
+
+def test_a_step_that_worked_does_not_repeat_itself(capsys):
+    """"text '' exposes no readable text (name='')" is the noise that makes a
+    run unreadable — and it is what a *successful* read looks like."""
+    report = _make_reporter(Out(color=False), stream=False, verbose=False)
+    report("tool_result", {"name": "ui_read", "ok": True, "summary": "text '' exposes no..."})
+    assert capsys.readouterr().out == ""
+
+
+def test_a_step_that_failed_says_so_loudly(capsys):
+    report = _make_reporter(Out(color=False), stream=False, verbose=False)
+    report("tool_result", {"name": "ui_click", "ok": False, "summary": "element_not_found: Save"})
+    text = capsys.readouterr().out
+    assert "element_not_found: Save" in text
+    assert "✗" in text
+
+
+def test_a_tool_with_no_plain_form_still_prints_something(capsys):
+    report = _make_reporter(Out(color=False), stream=False, verbose=False)
+    report("tool_call", {"name": "mystery_tool", "input": {}})
+    assert "mystery_tool" in capsys.readouterr().out

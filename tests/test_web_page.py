@@ -102,3 +102,29 @@ def test_the_screen_panel_says_whose_screen_it_is(page):
 def test_the_screen_opens_by_default_only_when_there_is_a_separate_one(page):
     assert "separate" in page
     assert "lai.screen" in page, "and a viewer who closed it is remembered"
+
+
+# -- readable by somebody who is not a programmer -------------------------
+
+
+def test_the_feed_speaks_plainly_by_default(page):
+    """`ui_click {"ref":114}` is precise for whoever is debugging the call, and
+    useless to the person watching their own computer being used."""
+    assert "let plain = true" in page
+    assert "event.plain" in page
+
+
+def test_the_detail_is_one_button_away(page):
+    """The moment something goes wrong the tool name is what matters."""
+    assert 'id="detail"' in page
+    assert "lai.detail" in page, "and the choice is remembered"
+
+
+def test_a_step_that_worked_does_not_repeat_itself_in_the_feed(page):
+    assert "if (event.ok) sharpen(row, summary);" in page
+
+
+def test_a_click_by_reference_is_named_from_its_result(page):
+    """The request could not say which button; the result can."""
+    assert "function sharpen" in page
+    assert "an item on screen" in page

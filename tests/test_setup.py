@@ -853,3 +853,42 @@ def test_the_finish_explains_the_separate_desktop(capsys):
     text = capsys.readouterr().out
     assert "desktop of its own" in text
     assert "--here" in text
+
+
+def test_setup_offers_a_way_in_that_needs_no_terminal(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    from lai.cli import Out
+    from lai.setup_wizard import Answers, Prompt, _setup_launcher
+
+    answers = Answers(fixed=[], skipped=[])
+    _setup_launcher(Out(color=False), Prompt(assume_yes=True), answers)
+    assert "launcher" in answers.fixed
+    assert (tmp_path / "applications" / "lai.desktop").is_file()
+
+
+def test_declining_the_launcher_says_how_to_get_it_later(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    from lai.cli import Out
+    from lai.setup_wizard import Answers, Prompt, _setup_launcher
+
+    prompt = Prompt(assume_yes=False, interactive=False)
+    monkeypatch.setattr(prompt, "confirm", lambda question, default=True: False)
+    answers = Answers(fixed=[], skipped=[])
+    _setup_launcher(Out(color=False), prompt, answers)
+    assert "launcher" in answers.skipped
+    assert "lai launcher" in capsys.readouterr().out
+
+
+def test_the_finish_leads_with_the_menu_when_there_is_one(capsys, tmp_path, monkeypatch):
+    """The person who needs the icon is not the person reading this screen."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    from lai import launcher
+    from lai.cli import Out
+    from lai.config import load_config
+    from lai.setup_wizard import Answers, _finish
+
+    launcher.install()
+    _finish(Out(color=False), load_config(), Answers(fixed=[], skipped=[]))
+    text = capsys.readouterr().out
+    assert "applications menu" in text
+    assert text.index("applications menu") < text.index("lai doctor")

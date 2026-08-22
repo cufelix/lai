@@ -42,6 +42,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "repl": ("run tasks", "Plain interactive session (no prompt niceties)"),
     "tui": ("run tasks", "Full-screen dashboard: live view, costs, approvals"),
     "web": ("run tasks", "Open the same agent in your browser"),
+    "open": ("run tasks", "Show LAI in your browser — what the menu icon runs"),
+    "launcher": ("start here", "Put LAI in your applications menu, so no terminal is needed"),
     "notes": ("inspect", "What it has learned about this machine — read, edit, delete"),
     "observe": ("inspect", "Print what the agent currently sees"),
     "sessions": ("inspect", "List or inspect past sessions"),
@@ -249,16 +251,28 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
             if state["streaming"]:
                 out.raw("\n")
                 state["streaming"] = False
-            args = json.dumps(payload.get("input", {}), ensure_ascii=False)
-            out.write(f"[cyan]▸ {payload['name']}[/cyan] [dim]{args[:160]}[/dim]")
+            if verbose:
+                args = json.dumps(payload.get("input", {}), ensure_ascii=False)
+                out.write(f"[cyan]▸ {payload['name']}[/cyan] [dim]{args[:160]}[/dim]")
+            else:
+                # The tool name is what you want when something breaks, and
+                # noise the rest of the time. `--verbose` is the switch.
+                out.write(f"[cyan]▸[/cyan] {payload.get('plain') or payload['name']}")
         elif kind == "tool_result":
             halt()
-            mark = "[green]✓[/green]" if payload.get("ok") else "[red]✗[/red]"
             summary = (payload.get("summary") or "").strip().splitlines()
             first = summary[0][:170] if summary else ""
+            if not verbose and payload.get("ok"):
+                # A step that worked has already been described. Repeating it
+                # in the tool's own words — "text '' exposes no readable text
+                # (name='')" — is the noise that makes a run unreadable.
+                spin()
+                return
+            mark = "[green]✓[/green]" if payload.get("ok") else "[red]✗[/red]"
             extra = f" [dim](+{len(summary) - 1} lines)[/dim]" if len(summary) > 1 else ""
             image = " [magenta]+image[/magenta]" if payload.get("images") else ""
-            out.write(f"  {mark} [dim]{first}[/dim]{extra}{image}")
+            colour = "dim" if payload.get("ok") else "red"
+            out.write(f"  {mark} [{colour}]{first}[/{colour}]{extra}{image}")
             spin()
         elif kind == "provider_switch":
             halt()
@@ -867,6 +881,64 @@ def cmd_tui(args) -> int:
     return 0
 
 
+def cmd_open(args) -> int:
+    """What the menu icon runs: show me LAI, and do not make me think.
+
+    Double-clicking an icon twice must not start two daemons fighting over one
+    port, so an already-running one is simply reused. Nothing is printed unless
+    something goes wrong — there is no terminal to print it to.
+    """
+    from .daemon.server import _load_or_create_token  # noqa: PLC0415
+    from .web import url as web_url  # noqa: PLC0415
+
+    out = Out()
+    config = _apply_overrides(load_config(), args)
+    config.ensure_dirs()
+    token = _load_or_create_token(config)
+    address = web_url(args.host, args.port, token)
+
+    if _daemon_is_up(args.host, args.port):
+        _open_browser(address)
+        out.write("[dim]LAI was already running — opened it in your browser.[/dim]")
+        return 0
+
+    args.no_open = False
+    return cmd_web(args)
+
+
+def _daemon_is_up(host: str, port: int) -> bool:
+    """Whether something of ours is already answering on that port."""
+    import httpx  # noqa: PLC0415
+
+    where = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host  # noqa: S104 - local probe
+    try:
+        response = httpx.get(f"http://{where}:{port}/health", timeout=1.5)
+        return response.status_code == 200 and response.json().get("service") == "lai"
+    except Exception:
+        return False
+
+
+def cmd_launcher(args) -> int:
+    """Put LAI in the applications menu, or take it out again."""
+    from . import launcher  # noqa: PLC0415
+
+    out = Out()
+    if getattr(args, "remove", False):
+        if launcher.uninstall():
+            out.write("[green]✓[/green] removed LAI from the applications menu")
+        else:
+            out.write("[dim]it was not in the menu[/dim]")
+        return 0
+
+    entry = launcher.install()
+    out.write("[green]✓[/green] LAI is in your applications menu")
+    out.write(f"  [dim]{entry}[/dim]")
+    out.write("")
+    out.write("[dim]Search for “LAI” in your menu. Clicking it opens the browser[/dim]")
+    out.write("[dim]interface — no terminal needed, ever.[/dim]")
+    return 0
+
+
 def cmd_web(args) -> int:
     """Serve the browser interface — the same agent, reached from a tab."""
     from .daemon.server import _load_or_create_token, serve  # noqa: PLC0415
@@ -1451,6 +1523,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_web.add_argument("--allow-remote", action="store_true", help="Permit binding a non-loopback address")
     add_agent_flags(p_web)
     p_web.set_defaults(func=cmd_web)
+
+    p_open = sub.add_parser(
+        "open",
+        help=_help("open"),
+        epilog="What the applications-menu icon runs. Reuses a daemon that is already up.",
+    )
+    p_open.add_argument("--host", default="127.0.0.1")
+    p_open.add_argument("--port", type=int, default=8787)
+    p_open.add_argument("--allow-remote", action="store_true", help=argparse.SUPPRESS)
+    add_agent_flags(p_open)
+    p_open.set_defaults(func=cmd_open)
+
+    p_launcher = sub.add_parser(
+        "launcher",
+        help=_help("launcher"),
+        epilog="Adds a menu entry so LAI can be started without a terminal.",
+    )
+    p_launcher.add_argument("--remove", action="store_true", help="Take it out of the menu again")
+    p_launcher.set_defaults(func=cmd_launcher)
 
     p_channels = sub.add_parser("channels", help=_help("channels"))
     p_channels.add_argument(

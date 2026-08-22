@@ -21,6 +21,7 @@ from ..safety.audit import AuditLog
 from ..safety.policy import PolicyEngine, Risk
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
 from ..tools.control import BLOCKED_MARKER, DONE_MARKER
+from . import plainly
 from .prompt import build_system_prompt
 from .providers.base import (
     Message,
@@ -515,7 +516,12 @@ class Agent:
             if self.stop_requested.is_set():
                 raise Interrupted("stopped by user")
 
-            self._emit("tool_call", {"name": call.name, "input": call.input, "id": call.id})
+            # The plain sentence rides along with the call, so every interface
+            # gets it without each one reimplementing the translation.
+            self._emit("tool_call", {
+                "name": call.name, "input": call.input, "id": call.id,
+                "plain": plainly.describe(call.name, call.input),
+            })
 
             refusal = self.repetition.should_refuse(call.name, call.input)
             if refusal:

@@ -276,6 +276,33 @@ script if you already have one. If a key is already in your environment,
 
 ## Use
 
+### Without a terminal
+
+`lai launcher` puts **LAI** in your applications menu — `lai setup` offers it.
+Clicking it opens the browser interface; a second click reuses the one already
+running rather than starting a second. That is the whole path for somebody who
+should not have to meet a shell.
+
+What the agent is doing is written in plain words, not tool calls:
+
+```
+Opening the calculator to work out 45 + 78.
+▸ Opened “Calculator”
+▸ Clicked “4”   ▸ Clicked “5”   ▸ Clicked “+”   ▸ Clicked “7”   ▸ Clicked “8”   ▸ Clicked “=”
+▸ Read what is on screen
+The calculator shows 45 + 78 = 123.
+✓ completed · 4 steps · 25s
+```
+
+A step that worked does not repeat itself in the tool's own words: reading a
+widget that exposes no text *succeeds*, and it says so as `text '' exposes no
+readable text (name='')`, which is the noise that makes a run unreadable. A
+step that failed says so plainly. `details` in the browser, `f3` in the TUI and
+`--verbose` on the command line put the tool names back, which is what you want
+the moment something breaks.
+
+## Commands
+
 ```bash
 lai                             # setup if new, otherwise the chat interface
 lai --continue                  # pick up the last conversation
@@ -288,6 +315,8 @@ lai doctor                      # environment diagnostics
 lai notes                       # what it has learned about this machine
 lai observe                     # print exactly what the agent sees right now
 lai tools                       # list the 53 tools
+lai launcher                    # put LAI in the applications menu
+lai open                        # what the menu icon runs
 lai skills list|install|show    # manage skills
 lai sessions                    # past runs
 lai sessions <id>               # replay one, readably

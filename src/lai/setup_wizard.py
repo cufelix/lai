@@ -130,7 +130,7 @@ def run_setup(
     _banner(out)
 
     # 1. What is missing, and can we fix it?
-    out.write("[bold]1/4  Checking this machine[/bold]")
+    out.write("[bold]1/5  Checking this machine[/bold]")
     report = _probe(config)
     _render_summary(out, report)
 
@@ -150,7 +150,7 @@ def run_setup(
 
     # 2. A model to think with.
     out.write("")
-    out.write("[bold]2/4  Model backend[/bold]")
+    out.write("[bold]2/5  Model backend[/bold]")
     settings = config_file.read(config.home)
     provider_settings = _setup_provider(out, prompt, report, answers)
     if provider_settings:
@@ -158,7 +158,7 @@ def run_setup(
 
     # 3. How much freedom it gets.
     out.write("")
-    out.write("[bold]3/4  How much should it ask?[/bold]")
+    out.write("[bold]3/5  How much should it ask?[/bold]")
     mode = _setup_mode(out, prompt)
     answers.mode = mode
     settings = config_file.merge(settings, {"safety": {"mode": mode}})
@@ -167,9 +167,14 @@ def run_setup(
     answers.config_written = written
     out.write(f"  [green]✓[/green] saved [dim]{written}[/dim]")
 
-    # 4. Prove it works.
+    # 4. Somewhere to click.
     out.write("")
-    out.write("[bold]4/4  First run[/bold]")
+    out.write("[bold]4/5  A way in without a terminal[/bold]")
+    _setup_launcher(out, prompt, answers)
+
+    # 5. Prove it works.
+    out.write("")
+    out.write("[bold]5/5  First run[/bold]")
     if skip_demo:
         out.write("  [dim]skipped[/dim]")
     else:
@@ -478,6 +483,32 @@ def _setup_ollama(out, prompt: Prompt, answers: Answers) -> dict:
     return {"name": "ollama", "model": model, "base_url": OLLAMA_BASE_URL}
 
 
+def _setup_launcher(out, prompt: Prompt, answers: Answers) -> None:
+    """Offer a menu entry.
+
+    Everything else here assumes a terminal — a reasonable assumption for
+    whoever ran the install, and a fatal one for anybody they hand it to.
+    """
+    from . import launcher  # noqa: PLC0415
+
+    if launcher.installed():
+        out.write("  [green]✓[/green] already in your applications menu")
+        return
+    out.write("  [dim]Adds “LAI” to your applications menu. Clicking it opens the[/dim]")
+    out.write("  [dim]browser interface, so nobody has to type a command.[/dim]")
+    if not prompt.confirm("  add it?", default=True):
+        answers.skipped.append("launcher")
+        out.write("  [dim]skipped — `lai launcher` adds it later[/dim]")
+        return
+    try:
+        entry = launcher.install()
+    except OSError as exc:
+        out.write(f"  [yellow]could not write the menu entry: {exc}[/yellow]")
+        return
+    answers.fixed.append("launcher")
+    out.write(f"  [green]✓[/green] added [dim]{entry}[/dim]")
+
+
 def _setup_mode(out, prompt: Prompt) -> str:
     picked = prompt.choose(
         "  Permission mode:",
@@ -573,8 +604,18 @@ def _finish(out, config: Config, answers: Answers) -> tuple[int, Answers]:
     out.write("  [dim]it does touches your windows. When a task ends, the pages and files[/dim]")
     out.write("  [dim]it produced open on your desktop.[/dim]")
 
+    from . import launcher  # noqa: PLC0415
+
     out.write("")
-    out.write("[bold]Try this:[/bold]")
+    if launcher.installed():
+        # The way in that needs no terminal goes first, because the person who
+        # needs it most is not the person reading this screen.
+        out.write("[bold]To start it:[/bold] search your applications menu for "
+                  "[bold]LAI[/bold].")
+        out.write("")
+        out.write("[dim]From a terminal, if you prefer:[/dim]")
+    else:
+        out.write("[bold]Try this:[/bold]")
     for command, purpose in (
         ("lai", "chat with it"),
         ('lai do "open the calculator"', "one task, right now"),
@@ -592,7 +633,7 @@ def _finish(out, config: Config, answers: Answers) -> tuple[int, Answers]:
 def _banner(out) -> None:
     out.write("")
     out.write("[bold]LAI setup[/bold] — a native agent for your Linux desktop")
-    out.write("[dim]Four steps. Nothing is changed without asking.[/dim]")
+    out.write("[dim]Five steps. Nothing is changed without asking.[/dim]")
     out.write("")
 
 

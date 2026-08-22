@@ -384,6 +384,8 @@
   </nav>
   <span class="spacer"></span>
   <span class="chip" id="runstate" hidden>working</span>
+  <button class="iconbtn" id="detail" aria-pressed="false"
+          title="Show the tool names and arguments">details</button>
   <span class="chip live" id="who">connecting…</span>
   <span class="chip" id="modeChip">–</span>
   <span class="chip" id="standby" hidden></span>
@@ -635,6 +637,17 @@
     return node;
   };
 
+  // An action taken by reference — `ui_click {"ref": 114}` — cannot say which
+  // button it was, but the *result* can: "Clicked push button '4'". Where the
+  // result knows more than the request did, the line is rewritten with it.
+  const SHARPER = /^Clicked (?:push button|menu item|toggle button|radio button|check box|link) '([^']+)'/;
+  function sharpen(row, summary) {
+    const better = SHARPER.exec(summary);
+    const label = row.querySelector(".name");
+    if (!better || !label || !label.textContent.includes("an item on screen")) return;
+    label.textContent = `▸ Clicked “${better[1]}”`;
+  }
+
   function toolRow(name, args) {
     const row = el("div", "tool");
     row.appendChild(el("span", "name", "▸ " + name));
@@ -712,16 +725,26 @@
       }
       case "tool_call":
         streamBuffer = null;
-        setTool(toolRow(event.name, JSON.stringify(event.input || {}).slice(0, 120)));
+        setTool(plain
+          ? toolRow(event.plain || event.name, "")
+          : toolRow(event.name, JSON.stringify(event.input || {}).slice(0, 120)));
         break;
       case "tool_result": {
         const row = getTool();
         if (!row) break;
         const summary = String(event.summary || "").split("\n")[0].slice(0, 110);
         if (!event.ok) row.classList.add("bad");
-        const out = el("span", "out", event.ok ? summary : "✗ " + summary);
-        if (event.ok) out.classList.add("good");
-        row.appendChild(out);
+        if (plain) {
+          // A step that worked has already been described. Its own words —
+          // "text '' exposes no readable text (name='')" — are what a
+          // *successful* read looks like, and they are unreadable.
+          if (event.ok) sharpen(row, summary);
+          else row.appendChild(el("span", "out", "✗ " + summary));
+        } else {
+          const out = el("span", "out", event.ok ? summary : "✗ " + summary);
+          if (event.ok) out.classList.add("good");
+          row.appendChild(out);
+        }
         if (event.images) refreshScreen();
         break;
       }
@@ -876,6 +899,23 @@
     put(box);
     field.focus();
   }
+
+  // Plain language by default. `ui_click {"ref":114}` is precise, and it is
+  // precise for whoever is debugging the call — not for the person watching
+  // their own computer being used. The detail is one button away, because the
+  // moment something goes wrong the tool name is what matters.
+  let plain = true;
+  try { plain = sessionStorage.getItem("lai.detail") !== "1"; } catch { /* private mode */ }
+  const applyDetail = () => {
+    $("detail").setAttribute("aria-pressed", String(!plain));
+    $("detail").textContent = plain ? "details" : "simple";
+  };
+  applyDetail();
+  $("detail").addEventListener("click", () => {
+    plain = !plain;
+    try { sessionStorage.setItem("lai.detail", plain ? "" : "1"); } catch { /* private mode */ }
+    applyDetail();
+  });
 
   let screenOn = false;
   function refreshScreen() {
