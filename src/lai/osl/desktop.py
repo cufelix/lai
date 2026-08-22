@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ..errors import ElementNotFound, LaiError, WindowNotFound
 from .a11y import A11yTree, Element, Snapshot
@@ -87,6 +88,7 @@ class Desktop:
         max_edge: int = 1400,
         a11y_timeout_ms: int = 800,
         display: str | None = None,
+        browser_profile: Path | None = None,
     ) -> None:
         # Resolve the X session first: LAI is frequently launched by something
         # that strips DISPLAY (MCP clients, systemd, cron, ssh).
@@ -95,7 +97,7 @@ class Desktop:
         self.input = InputController()
         self.windows = WindowManager(display)
         self.a11y = A11yTree(timeout_ms=a11y_timeout_ms)
-        self.apps = AppLauncher(self.windows)
+        self.apps = AppLauncher(self.windows, browser_profile=browser_profile)
         self.clipboard = Clipboard()
         self._snapshot: Snapshot | None = None
 

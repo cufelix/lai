@@ -147,6 +147,10 @@ def build_runtime(
         max_edge=config.desktop.max_edge,
         a11y_timeout_ms=config.desktop.a11y_timeout_ms,
         display=display,
+        # On its own screen a browser must be given its own profile, or it
+        # simply hands the request to the copy already running on yours and
+        # exits — which reads as "the application would not start".
+        browser_profile=Path(config.home) / "browser" if screen is not None else None,
     )
 
     policy = PolicyEngine(

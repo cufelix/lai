@@ -412,6 +412,18 @@ class Agent:
                                                "model": self.provider.model, "reason": reason})
                 self.audit.write("provider_switch", **{"from": was, "to": now, "reason": reason})
 
+    def _is_acting(self, tool_name: str) -> bool:
+        """Whether this tool drives the mouse or keyboard.
+
+        Those report success for having sent the event, not for anything having
+        happened, so an identical repeat is the only signal available that the
+        click is landing somewhere it should not.
+        """
+        try:
+            return self.registry.get(tool_name).risk is Risk.INPUT
+        except Exception:
+            return False
+
     def _yield_to_human(self, tool_name: str) -> None:
         """Wait, if the human is using the mouse this tool is about to move.
 
@@ -520,7 +532,8 @@ class Agent:
             self._yield_to_human(call.name)
             result: ToolResult = self.registry.call(call.name, call.input, context)
             warning = self.repetition.record(
-                call.name, call.input, ok=result.ok, content=result.content
+                call.name, call.input, ok=result.ok, content=result.content,
+                acting=self._is_acting(call.name),
             )
             if warning:
                 result = replace(result, content=result.content + warning)

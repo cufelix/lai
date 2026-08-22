@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -517,3 +518,34 @@ def test_no_ocr_available_says_what_to_do_instead():
     assert result.ok
     assert "ui_snapshot" in result.content
     assert "tesseract is not installed" in result.content
+
+
+def test_a_screenshot_can_be_kept():
+    """A screenshot nobody kept is a claim. Saving one is the proof."""
+    import tempfile
+
+    target = Path(tempfile.mkdtemp()) / "proof.png"
+    ctx = ToolContext(desktop=FakeDesktop(), extra={"vision": True})
+    result = screenshot_registry().call("computer_screenshot", {"path": str(target)}, ctx)
+    assert result.ok
+    assert target.read_bytes() == b"\x89PNG"
+    assert str(target) in result.content
+    assert result.data["path"] == str(target)
+
+
+def test_a_saved_screenshot_is_always_a_png():
+    import tempfile
+
+    target = Path(tempfile.mkdtemp()) / "proof.jpg"
+    ctx = ToolContext(desktop=FakeDesktop(), extra={"vision": True})
+    result = screenshot_registry().call("computer_screenshot", {"path": str(target)}, ctx)
+    assert result.data["path"].endswith(".png")
+
+
+def test_a_missing_directory_is_created():
+    import tempfile
+
+    target = Path(tempfile.mkdtemp()) / "a" / "b" / "proof.png"
+    ctx = ToolContext(desktop=FakeDesktop(), extra={"vision": True})
+    screenshot_registry().call("computer_screenshot", {"path": str(target)}, ctx)
+    assert target.exists()

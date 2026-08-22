@@ -105,11 +105,66 @@ class LaunchResult:
         }
 
 
+# Browsers are single-instance by design: start one while another is already
+# running and it hands your request to that one and exits. On the agent's own
+# display that is fatal — the process starts, the window appears on *your*
+# desktop or nowhere at all, and the launcher reports "no window appeared".
+# These are the flags that make a second, independent instance.
+BROWSER_ISOLATION: dict[str, tuple[str, ...]] = {
+    "firefox": ("--no-remote", "--profile", "{profile}"),
+    "firefox-esr": ("--no-remote", "--profile", "{profile}"),
+    "librewolf": ("--no-remote", "--profile", "{profile}"),
+    "waterfox": ("--no-remote", "--profile", "{profile}"),
+    "google-chrome": ("--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"),
+    "google-chrome-stable": (
+        "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+    ),
+    "chromium": ("--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"),
+    "chromium-browser": (
+        "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+    ),
+    "brave-browser": ("--user-data-dir={profile}", "--no-first-run"),
+    "microsoft-edge": ("--user-data-dir={profile}", "--no-first-run"),
+    "vivaldi": ("--user-data-dir={profile}", "--no-first-run"),
+    "opera": ("--user-data-dir={profile}",),
+}
+
+
+def isolate_browser(command: list[str], profile_root: Path) -> list[str]:
+    """Command that starts its *own* browser, not a message to somebody else's.
+
+    Left alone if it is not a browser, or if the caller already said which
+    profile to use — an explicit choice outranks this one.
+    """
+    if not command:
+        return command
+    binary = Path(command[0]).name.lower()
+    flags = BROWSER_ISOLATION.get(binary)
+    if flags is None:
+        return command
+    already = {"--profile", "-p", "--user-data-dir", "--no-remote"}
+    if any(part.split("=")[0] in already for part in command[1:]):
+        return command
+
+    profile = profile_root / binary
+    profile.mkdir(parents=True, exist_ok=True)
+    extra = [flag.format(profile=str(profile)) for flag in flags]
+    # Flags go before the URL: Chrome ignores switches that follow a positional.
+    return [command[0], *extra, *command[1:]]
+
+
 class AppLauncher:
     """Finds and starts desktop applications."""
 
-    def __init__(self, window_manager: WindowManager | None = None) -> None:
+    def __init__(
+        self,
+        window_manager: WindowManager | None = None,
+        *,
+        browser_profile: Path | None = None,
+    ) -> None:
         self._wm = window_manager or WindowManager()
+        self.browser_profile = browser_profile
+        """Where isolated browser profiles live, when browsers must be isolated."""
         self._cache: list[AppEntry] | None = None
         self._cache_at: float = 0.0
         self._cache_ttl: float = 60.0
@@ -188,6 +243,8 @@ class AppLauncher:
 
         if not command:
             raise LaiError(f"application {query!r} has no runnable command")
+        if self.browser_profile is not None:
+            command = isolate_browser(command, self.browser_profile)
 
         before = {w.id for w in self._safe_window_ids()}
         env = {**os.environ, "GDK_BACKEND": os.environ.get("GDK_BACKEND", "x11")}

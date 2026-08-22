@@ -150,3 +150,71 @@ def test_the_loop_refuses_the_third_attempt_without_running_it(tmp_path):
         agent._run_tools([call], 1)
 
     assert len(calls) == REFUSE_AT - 1, "it stops actually running the doomed call"
+
+
+# -- an action that always claims to work --------------------------------
+
+
+def test_identical_clicks_are_counted_even_though_they_succeed():
+    """Sending a click to a pixel is reported as done whether or not anything
+    happened. A model hunting for a toolbar it cannot quite see will click the
+    same coordinates twenty times, and every one comes back ✓."""
+    from lai.agent.repetition import REPEAT_WARN_AT, Repetition
+
+    tracker = Repetition()
+    click = {"x": 333, "y": 324}
+    warnings = [
+        tracker.record("computer_click", click, ok=True, acting=True)
+        for _ in range(REPEAT_WARN_AT)
+    ]
+    assert warnings[-2] == "", "clicking one button twice is ordinary"
+    assert "identical" in warnings[-1]
+
+
+def test_the_sixth_identical_click_is_refused():
+    from lai.agent.repetition import REPEAT_REFUSE_AT, Repetition
+
+    tracker = Repetition()
+    click = {"x": 333, "y": 324}
+    for _ in range(REPEAT_REFUSE_AT - 1):
+        assert tracker.should_refuse("computer_click", click) == ""
+        tracker.record("computer_click", click, ok=True, acting=True)
+    refusal = tracker.should_refuse("computer_click", click)
+    assert "not landing where you think" in refusal
+    assert "ui_snapshot" in refusal
+
+
+def test_a_different_target_is_exploration_not_repetition():
+    from lai.agent.repetition import REPEAT_REFUSE_AT, Repetition
+
+    tracker = Repetition()
+    for index in range(REPEAT_REFUSE_AT * 2):
+        target = {"x": 300 + index, "y": 324}
+        assert tracker.should_refuse("computer_click", target) == ""
+        assert tracker.record("computer_click", target, ok=True, acting=True) == ""
+
+
+def test_reading_the_same_thing_twice_is_never_repetition():
+    """Polling a window list until it changes is the correct way to wait."""
+    from lai.agent.repetition import REPEAT_REFUSE_AT, Repetition
+
+    tracker = Repetition()
+    for _ in range(REPEAT_REFUSE_AT * 3):
+        assert tracker.record("window_list", {}, ok=True, acting=False) == ""
+        assert tracker.should_refuse("window_list", {}) == ""
+
+
+def test_the_loop_knows_which_tools_act():
+    from lai.agent.loop import Agent
+    from lai.safety.policy import Risk
+
+    agent = Agent.__new__(Agent)
+
+    class Registry:
+        def get(self, name):
+            return type("S", (), {"risk": Risk.INPUT if name == "computer_click" else Risk.READ})()
+
+    agent.registry = Registry()
+    assert agent._is_acting("computer_click") is True
+    assert agent._is_acting("window_list") is False
+    assert agent._is_acting("nonsense") is False

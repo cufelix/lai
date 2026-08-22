@@ -338,3 +338,58 @@ def test_apps_returns_non_empty_list_with_valid_entries():
     for entry in entries:
         assert entry.name.strip() != ""
         assert entry.exec_line.strip() != ""
+
+
+# -- a browser that is actually a second browser -------------------------
+
+
+def test_a_browser_is_given_its_own_profile(tmp_path):
+    """Browsers are single-instance: start one while another is running and it
+    hands your request to that one and exits. On the agent's own display the
+    window then appears on *your* desktop, or nowhere, and the launcher reports
+    "no window appeared" — which is what it did."""
+    from lai.osl.apps import isolate_browser
+
+    command = isolate_browser(["/usr/bin/firefox", "https://example.test"], tmp_path)
+    assert command[0] == "/usr/bin/firefox"
+    assert "--no-remote" in command
+    assert str(tmp_path / "firefox") in command
+    assert command[-1] == "https://example.test", "flags must precede the URL"
+
+
+def test_chromium_family_gets_a_user_data_dir(tmp_path):
+    from lai.osl.apps import isolate_browser
+
+    command = isolate_browser(["/usr/bin/google-chrome-stable"], tmp_path)
+    assert f"--user-data-dir={tmp_path / 'google-chrome-stable'}" in command
+    assert "--no-first-run" in command
+
+
+def test_the_profile_directory_is_created(tmp_path):
+    from lai.osl.apps import isolate_browser
+
+    isolate_browser(["/usr/bin/firefox"], tmp_path)
+    assert (tmp_path / "firefox").is_dir()
+
+
+def test_anything_that_is_not_a_browser_is_left_alone(tmp_path):
+    from lai.osl.apps import isolate_browser
+
+    assert isolate_browser(["/usr/bin/xed", "a.txt"], tmp_path) == ["/usr/bin/xed", "a.txt"]
+    assert isolate_browser([], tmp_path) == []
+
+
+def test_an_explicit_profile_wins(tmp_path):
+    """Somebody who said which profile to use meant it."""
+    from lai.osl.apps import isolate_browser
+
+    command = ["/usr/bin/firefox", "--profile", "/home/me/work"]
+    assert isolate_browser(command, tmp_path) == command
+
+
+def test_the_launcher_leaves_browsers_alone_on_your_own_desktop(tmp_path):
+    """Sharing your desktop is the one case where handing the URL to the
+    browser you already have open is exactly right."""
+    from lai.osl.apps import AppLauncher
+
+    assert AppLauncher(window_manager=object()).browser_profile is None

@@ -6,6 +6,8 @@ exist for everything else: Electron apps, games, VMs, canvases.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..osl.geometry import Rect
 from ..safety.policy import Risk
 from .base import ToolContext, ToolRegistry, ToolResult
@@ -14,6 +16,18 @@ _COORD = {
     "x": {"type": "integer", "description": "Absolute screen X in pixels"},
     "y": {"type": "integer", "description": "Absolute screen Y in pixels"},
 }
+
+
+def _save(path, png: bytes) -> str:
+    """Write the capture out, if asked. A screenshot nobody kept is a claim."""
+    if not path:
+        return ""
+    target = Path(str(path)).expanduser()
+    if target.suffix.lower() != ".png":
+        target = target.with_suffix(".png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(png)
+    return str(target)
 
 
 def _read_for_a_blind_model(ctx: ToolContext, region) -> str:
@@ -67,6 +81,10 @@ def register(registry: ToolRegistry) -> None:
                     "description": "Draw numbered boxes over accessible elements (refs usable with ui_click)",
                 },
                 "max_edge": {"type": "integer", "minimum": 320, "maximum": 3000},
+                "path": {
+                    "type": "string",
+                    "description": "Also write the PNG here, to leave proof of what was on screen",
+                },
             }
         },
         risk=Risk.READ,
@@ -118,6 +136,11 @@ def register(registry: ToolRegistry) -> None:
         ]
         if active:
             lines.append(f"Focused window: {active.title!r} [{active.wm_class}] at {active.bounds.as_tuple()}")
+
+        saved = _save(args.get("path"), shot.png)
+        if saved:
+            lines.append(f"Saved to {saved}")
+            info["path"] = saved
 
         # A model with no vision gets an image it cannot open, and the run
         # stalls somewhere it has no way to see out of. Reading the pixels for
