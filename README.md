@@ -763,6 +763,24 @@ Claude Code's own MCP config, connects to each server, and registers their tools
 as `mcp__<server>__<tool>` — so anything reachable over MCP becomes something
 the desktop agent can do.
 
+Connect a handful of servers and that is several hundred tools. Sending every
+schema on every turn is the most expensive thing a well-equipped machine does —
+measured here at 242 KB of JSON, about sixty thousand tokens, to answer *how
+many windows do I have open*. So LAI's own tools always go, and the connected
+ones are matched against the task. What is left out is named rather than
+hidden:
+
+```
+# Connected services
+195 further tools are connected but not listed above, from: confluence (25),
+firecrawl (27), github (26)… If you need one, call `tool_find(query)`.
+```
+
+`tool_find` searches every connected tool and makes the matches callable for
+the rest of the run. Naming the service works — *read a github pull request*
+finds the github tools — because servers are matched before word frequencies
+are consulted.
+
 ---
 
 ## HTTP daemon
