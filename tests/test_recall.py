@@ -166,6 +166,7 @@ def test_the_agent_puts_it_in_the_system_prompt(tmp_path, journal, memory):
     agent.session = Session()
     agent.gate = ToolGate(ToolRegistry())
     agent.provider = type("P", (), {"supports_vision": True})()
+    agent.on_own_screen = False
 
     prompt = agent._build_system_prompt("open the editor with a dark theme")
     assert "Xed" in prompt and "dark themes" in prompt

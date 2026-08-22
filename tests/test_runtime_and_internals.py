@@ -9,6 +9,7 @@ import zipfile
 import httpx
 import pytest
 
+from lai.config import load_config
 from lai.errors import ProviderError, SkillError
 from lai.runtime import build_runtime
 
@@ -386,3 +387,96 @@ def test_payload_omits_empty_optional_fields():
         assert payload["temperature"] == 1.0
     finally:
         provider.close()
+
+
+# -- whose screen is it ---------------------------------------------------
+
+
+def _no_x_server(monkeypatch):
+    from lai.errors import BackendUnavailable
+
+    def refuse(self, **kwargs):
+        raise BackendUnavailable("no virtual X server installed")
+
+    monkeypatch.setattr("lai.osl.virtual.VirtualDisplay.start", refuse)
+
+
+def test_the_agent_gets_its_own_screen_by_default(monkeypatch, tmp_path):
+    """Sharing one desktop means clicking into the window its owner just
+    switched to. No amount of taking turns makes that acceptable."""
+    from lai.runtime import _own_screen
+
+    started = []
+    monkeypatch.setattr("lai.osl.virtual.VirtualDisplay.start",
+                        lambda self, **kw: (started.append(1), ":90")[1] or setattr(self, "display", ":90"))
+    config = load_config().with_overrides(home=tmp_path)
+    screen, note = _own_screen(config, None)
+    assert screen is not None and started
+    assert "own screen" in note
+
+
+def test_here_means_your_desktop(monkeypatch, tmp_path):
+    from lai.runtime import _own_screen
+
+    monkeypatch.setattr("lai.osl.virtual.VirtualDisplay.start",
+                        lambda self, **kw: pytest.fail("must not start a server"))
+    screen, note = _own_screen(load_config().with_overrides(home=tmp_path), False)
+    assert screen is None
+    assert "your desktop" in note
+
+
+def test_auto_falls_back_to_your_desktop_and_says_why(monkeypatch, tmp_path):
+    from lai.runtime import _own_screen
+
+    _no_x_server(monkeypatch)
+    screen, note = _own_screen(load_config().with_overrides(home=tmp_path), None)
+    assert screen is None
+    assert "no virtual X server" in note and "your desktop" in note
+
+
+def test_always_refuses_rather_than_touching_your_desktop(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from lai.errors import BackendUnavailable
+    from lai.runtime import _own_screen
+
+    _no_x_server(monkeypatch)
+    config = load_config().with_overrides(home=tmp_path)
+    config = config.with_overrides(desktop=replace(config.desktop, own_display="always"))
+    with pytest.raises(BackendUnavailable, match="screen of its own"):
+        _own_screen(config, None)
+
+
+def test_asking_for_one_explicitly_is_an_error_when_there_is_none(monkeypatch, tmp_path):
+    from lai.errors import BackendUnavailable
+    from lai.runtime import _own_screen
+
+    _no_x_server(monkeypatch)
+    with pytest.raises(BackendUnavailable):
+        _own_screen(load_config().with_overrides(home=tmp_path), True)
+
+
+def test_never_keeps_the_old_behaviour(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from lai.runtime import _own_screen
+
+    monkeypatch.setattr("lai.osl.virtual.VirtualDisplay.start",
+                        lambda self, **kw: pytest.fail("must not start a server"))
+    config = load_config().with_overrides(home=tmp_path)
+    config = config.with_overrides(desktop=replace(config.desktop, own_display="never"))
+    screen, note = _own_screen(config, None)
+    assert screen is None and "your desktop" in note
+
+
+def test_virtual_still_wins_over_never(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from lai.runtime import _own_screen
+
+    monkeypatch.setattr("lai.osl.virtual.VirtualDisplay.start",
+                        lambda self, **kw: setattr(self, "display", ":91"))
+    config = load_config().with_overrides(home=tmp_path)
+    config = config.with_overrides(desktop=replace(config.desktop, own_display="never"))
+    screen, _ = _own_screen(config, True)
+    assert screen is not None

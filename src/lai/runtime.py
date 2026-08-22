@@ -18,7 +18,7 @@ from .agent.providers.base import Provider
 from .agent.providers.registry import build_provider
 from .agent.session import Session
 from .config import Config, load_config
-from .errors import LaiError, ProviderError
+from .errors import BackendUnavailable, LaiError, ProviderError
 from .osl.desktop import Desktop
 from .safety.audit import AuditLog
 from .safety.policy import PolicyEngine
@@ -51,6 +51,8 @@ class Runtime:
     desktop_lock: object | None = None
     virtual_display: object | None = None
     """A second X server this runtime started, and must therefore shut down."""
+    display_note: str = ""
+    """Why the agent ended up on the screen it is on, in one sentence."""
     scheduler: object | None = None
     task_store: object | None = None
     extra: dict = field(default_factory=dict)
@@ -88,6 +90,7 @@ class Runtime:
             desktop_lock=self.desktop_lock,
             memory=self.memory,
             on_own_screen=self.virtual_display is not None,
+            screen_note=self.display_note,
         )
         # Shared, long-lived services the tools reach through ToolContext.extra.
         # `agent` is set last so `delegate` can spawn a child of this very run.
@@ -121,7 +124,7 @@ def build_runtime(
     config: Config | None = None,
     *,
     cwd: Path | None = None,
-    virtual: bool = False,
+    virtual: bool | None = None,
     with_provider: bool = True,
     with_mcp: bool = True,
     groups: set[str] | None = None,
@@ -133,9 +136,11 @@ def build_runtime(
     config.ensure_dirs()
     work_dir = Path(cwd or Path.cwd())
 
-    # A display of the agent's own, when asked for: its own pointer, its own
-    # focus, its own window stack. The human keeps typing in theirs.
-    screen = _start_virtual_display(config) if virtual else None
+    # A display of the agent's own: its own pointer, its own focus, its own
+    # window stack. The human keeps typing in theirs. This is the default,
+    # because sharing one desktop means clicking into whatever window its owner
+    # just switched to — and no amount of taking turns makes that pleasant.
+    screen, display_note = _own_screen(config, virtual)
     display = screen.display if screen is not None else (config.desktop.display or None)
 
     desktop = Desktop(
@@ -198,6 +203,7 @@ def build_runtime(
         journal=journal,
         desktop_lock=desktop_lock,
         virtual_display=screen,
+        display_note=display_note,
         task_store=task_store,
     )
 
@@ -248,13 +254,44 @@ def _open_desktop_lock(config: Config, *, display: str = ""):
         return None
 
 
-def _start_virtual_display(config: Config):
-    """Bring up a second X server for the agent to work on."""
+def _own_screen(config: Config, wanted: bool | None):
+    """(the agent's own X server or None, one sentence saying why).
+
+    ``wanted`` is the caller's override — True forces a screen, False forbids
+    one, None leaves it to ``desktop.own_display``.
+    """
+    mode = config.desktop.own_display
+    if wanted is False or (wanted is None and mode == "never"):
+        return None, "sharing your desktop — it will wait while you are using the mouse"
+
     from .osl.virtual import VirtualDisplay  # noqa: PLC0415
 
-    screen = VirtualDisplay(size=(config.desktop.virtual_width, config.desktop.virtual_height))
-    screen.start()
-    return screen
+    screen = VirtualDisplay(
+        size=(config.desktop.virtual_width, config.desktop.virtual_height),
+        # Watching means a nested server: Xephyr draws the agent's whole screen
+        # into a window on yours, so you can see it working without it being
+        # able to touch anything of yours.
+        server="Xephyr" if config.desktop.watch else "",
+    )
+    try:
+        screen.start()
+    except Exception as exc:
+        insist = wanted is True or mode == "always"
+        if insist:
+            raise BackendUnavailable(
+                "cannot give the agent a screen of its own",
+                detail=f"{exc} — install Xvfb (`lai doctor --fix`), or set "
+                       "desktop.own_display = \"auto\" to fall back to your desktop",
+            ) from exc
+        return None, (
+            f"no screen of its own ({exc}) — working on your desktop instead, "
+            "and waiting while you use the mouse"
+        )
+    where = "in a window on your desktop" if config.desktop.watch else "off-screen"
+    return screen, (
+        f"working on its own screen {screen.display}, {where} — "
+        "nothing it does reaches your windows"
+    )
 
 
 def _open_journal(config: Config):

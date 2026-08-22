@@ -120,6 +120,7 @@ class Agent:
         desktop_lock=None,
         memory=None,
         on_own_screen: bool = False,
+        screen_note: str = "",
     ) -> None:
         self.config = config
         self.provider = provider
@@ -134,6 +135,7 @@ class Agent:
         """Cross-process claim on the desktop, held for the length of a run."""
         self._idle_probe = None
         self.on_own_screen = bool(on_own_screen)
+        self.screen_note = screen_note
         """True when this agent has a display to itself, so it shares nothing."""
         self.repetition = Repetition()
         """Notices the same failing call being made over and over."""
@@ -195,7 +197,8 @@ class Agent:
         self._tool_schemas = self.gate.schemas(task or self.session.task)
         self.session.append(Message.user(task))
 
-        self._emit("start", {"task": task, "provider": self.provider.name, "model": self.provider.model})
+        self._emit("start", {"task": task, "provider": self.provider.name,
+                             "model": self.provider.model, "screen": self.screen_note})
         self.audit.write("run_start", task=task, provider=self.provider.name, model=self.provider.model)
 
         consecutive_errors = 0
@@ -380,6 +383,7 @@ class Agent:
             knowledge=self._knowledge_block(task or self.session.task or ""),
             task=task or self.session.task or "",
             vision=bool(getattr(self.provider, "supports_vision", True)),
+            own_screen=self.on_own_screen,
         )
 
     def _model_turn(self):

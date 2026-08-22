@@ -149,6 +149,7 @@ def _strip_markup(text: str) -> str:
 
 
 def _apply_overrides(config, args):
+    """Command-line overrides, folded onto the loaded configuration."""
     provider = config.provider
     if getattr(args, "model", None):
         provider = replace(provider, model=args.model)
@@ -169,7 +170,13 @@ def _apply_overrides(config, args):
     if getattr(args, "timeout", None):
         limits = replace(limits, max_seconds=float(args.timeout))
 
-    return config.with_overrides(provider=provider, safety=safety, limits=limits)
+    desktop = config.desktop
+    if getattr(args, "watch", False):
+        desktop = replace(desktop, watch=True)
+
+    return config.with_overrides(
+        provider=provider, safety=safety, limits=limits, desktop=desktop
+    )
 
 
 def _interactive_approver(out: Out):
@@ -219,6 +226,8 @@ def _make_reporter(out: Out, *, stream: bool = True, verbose: bool = False):
             out.write(
                 f"[dim]{payload['provider']}/{payload['model']}[/dim] → [bold]{payload['task']}[/bold]"
             )
+            if payload.get("screen"):
+                out.write(f"[dim]{payload['screen']}[/dim]")
             out.rule()
             spin()
         elif kind == "step" and verbose:
@@ -369,8 +378,13 @@ def cmd_chat(args) -> int:
         runtime.close()
 
 
-def _virtual(args) -> bool:
-    return bool(getattr(args, "virtual", False))
+def _virtual(args) -> bool | None:
+    """The screen override for this invocation, or None for the configured one."""
+    if getattr(args, "here", False):
+        return False
+    if getattr(args, "virtual", False):
+        return True
+    return None
 
 
 def _resume_choice(args) -> str:
@@ -489,7 +503,9 @@ def cmd_doctor(args) -> int:
     # tens of seconds, and `lai doctor` is the command someone runs *because*
     # something is already wrong. The environment check must be instant.
     with_mcp = bool(getattr(args, "mcp", False))
-    runtime = build_runtime(config, with_provider=True, with_mcp=with_mcp)
+    # `lai doctor` reports on the machine you are sitting at, and must not
+    # start an X server of its own to do it.
+    runtime = build_runtime(config, with_provider=True, with_mcp=with_mcp, virtual=False)
     try:
         report = run_checks(runtime, config)
 
@@ -564,7 +580,9 @@ def cmd_setup(args) -> int:
 
 def cmd_observe(args) -> int:
     out = Out(quiet=args.json)
-    runtime = build_runtime(load_config(), with_provider=False, with_mcp=False)
+    # Explicitly your desktop: `lai observe` exists to show what *you* are
+    # looking at, and an empty virtual screen would be a useless answer.
+    runtime = build_runtime(load_config(), with_provider=False, with_mcp=False, virtual=False)
     try:
         observation = runtime.desktop.observe(
             screenshot=bool(args.screenshot), scope=args.scope, annotate_elements=args.annotate
@@ -584,7 +602,8 @@ def cmd_observe(args) -> int:
 
 def cmd_tools(args) -> int:
     out = Out(quiet=args.json)
-    runtime = build_runtime(load_config(), with_provider=False, with_mcp=not args.no_mcp)
+    runtime = build_runtime(load_config(), with_provider=False, with_mcp=not args.no_mcp,
+                            virtual=False)
     try:
         specs = runtime.registry.specs()
         if args.filter:
@@ -607,7 +626,7 @@ def cmd_tools(args) -> int:
 def cmd_skills(args) -> int:
     out = Out()
     config = load_config()
-    runtime = build_runtime(config, with_provider=False, with_mcp=False)
+    runtime = build_runtime(config, with_provider=False, with_mcp=False, virtual=False)
     try:
         action = args.action or "list"
         if action == "list":
@@ -1253,9 +1272,18 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--thinking", type=int, help="Extended thinking budget in tokens")
         p.add_argument("--dry-run", action="store_true", help="Block all side effects")
         p.add_argument("--no-mcp", action="store_true", help="Skip external MCP servers")
-        p.add_argument(
+        screen = p.add_mutually_exclusive_group()
+        screen.add_argument(
             "--virtual", action="store_true",
-            help="Work on a screen of its own, so you can keep using yours",
+            help="Work on a screen of its own, so you can keep using yours (the default)",
+        )
+        screen.add_argument(
+            "--here", action="store_true",
+            help="Work on your desktop instead — for tasks about the windows you have open",
+        )
+        p.add_argument(
+            "--watch", action="store_true",
+            help="Show the agent's screen in a window, so you can see what it is doing",
         )
         p.add_argument("--verbose", "-v", action="store_true")
 

@@ -237,3 +237,39 @@ def test_a_real_virtual_display_runs_an_application():
         assert shot.png[:8] == b"\x89PNG\r\n\x1a\n"
     finally:
         screen.stop()
+
+
+# -- the variable must not outlive the server ----------------------------
+
+
+def test_stopping_puts_the_real_display_back(monkeypatch):
+    """Xlib, mss, GTK, AT-SPI and xdotool are all steered by DISPLAY. Leaving
+    it pointing at a server that has been shut down breaks everything that
+    looks at a screen afterwards, in this process and any child it spawns."""
+    _fake_start(monkeypatch)
+    monkeypatch.setenv("DISPLAY", ":0")
+    screen = VirtualDisplay(display=":90")
+    screen.start()
+    os.environ["DISPLAY"] = ":90"  # as opening a Desktop on it does
+    screen.stop()
+    assert os.environ["DISPLAY"] == ":0"
+
+
+def test_stopping_when_there_was_no_display_leaves_none(monkeypatch):
+    _fake_start(monkeypatch)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    screen = VirtualDisplay(display=":90")
+    screen.start()
+    os.environ["DISPLAY"] = ":90"
+    screen.stop()
+    assert "DISPLAY" not in os.environ
+
+
+def test_a_display_somebody_else_changed_is_left_alone(monkeypatch):
+    _fake_start(monkeypatch)
+    monkeypatch.setenv("DISPLAY", ":0")
+    screen = VirtualDisplay(display=":90")
+    screen.start()
+    os.environ["DISPLAY"] = ":1"  # a second screen started after this one
+    screen.stop()
+    assert os.environ["DISPLAY"] == ":1"

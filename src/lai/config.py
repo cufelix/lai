@@ -29,6 +29,20 @@ DEFAULT_SKILL_PATHS: tuple[str, ...] = (
 
 PERMISSION_MODES = ("readonly", "ask", "auto", "yolo")
 
+OWN_DISPLAY_MODES = ("auto", "always", "never")
+"""Whether the agent works on a screen of its own.
+
+The whole premise of a desktop agent is that it uses a desktop — but sharing
+*yours* means it clicks into the window you just switched to, opens things over
+what you were reading, and takes your keyboard focus mid-sentence. Its own X
+server removes the contention entirely, so that is the default when one can be
+started.
+
+- ``auto``   — its own screen when one is available, yours when it is not.
+- ``always`` — its own screen or nothing; never touch the human's session.
+- ``never``  — work on the human's desktop, taking turns via ``yield_to_user``.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
@@ -134,9 +148,24 @@ class DesktopConfig:
     settle_timeout: float = 3.0
     annotate_screenshots: bool = False
     display: str = ""
+    own_display: str = "auto"
+    """Whether to give the agent a display of its own — see OWN_DISPLAY_MODES."""
+    watch: bool = False
+    """Draw the agent's screen in a window on yours, instead of off-screen.
+
+    Costs a nested X server (Xephyr) and a window you have to look at, and buys
+    you seeing exactly what it is doing. Worth it the first few times.
+    """
     virtual_width: int = 1920
     virtual_height: int = 1080
     """Size of the agent's own screen, when it is given one."""
+
+    def __post_init__(self) -> None:
+        if self.own_display not in OWN_DISPLAY_MODES:
+            raise ConfigError(
+                f"desktop.own_display must be one of {OWN_DISPLAY_MODES}, "
+                f"got {self.own_display!r}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +439,8 @@ def load_config(
         settle_timeout=float(desktop_data.get("settle_timeout", 3.0)),
         annotate_screenshots=bool(desktop_data.get("annotate_screenshots", False)),
         display=env.get("LAI_DISPLAY", desktop_data.get("display", "")),
+        own_display=str(desktop_data.get("own_display", "auto")).strip().lower(),
+        watch=bool(desktop_data.get("watch", False)),
         virtual_width=int(desktop_data.get("virtual_width", 1920)),
         virtual_height=int(desktop_data.get("virtual_height", 1080)),
     )

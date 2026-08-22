@@ -221,6 +221,18 @@ def _rank_skills(available: list, task: str) -> tuple[list, int]:
     )
 
 
+OWN_SCREEN = """# This screen is yours
+You are working on your own X display, not the human's. Their desktop, their
+windows and their mouse are somewhere you cannot reach, and nothing you do here
+appears on their screen or steals their focus — so work at full speed and do
+not wait for them.
+
+It also starts empty. Applications you need must be opened here first, and they
+start with no session: no logged-in browser profile, no open documents. If the
+task is about what the human already has open, you cannot see it — say so, and
+tell them to re-run with `lai do --here`."""
+
+
 NO_VISION = """# You cannot see
 This model has no vision. Screenshots will not reach you, so do not plan around
 looking at one. Read the screen instead:
@@ -243,6 +255,7 @@ def build_system_prompt(
     knowledge: str = "",
     task: str = "",
     vision: bool = True,
+    own_screen: bool = False,
 ) -> str:
     sections = [
         IDENTITY,
@@ -251,6 +264,8 @@ def build_system_prompt(
     ]
     if safety is not None:
         sections.append(safety_block(safety))
+    if own_screen:
+        sections.append(OWN_SCREEN)
     if not vision:
         sections.append(NO_VISION)
     skills_text = skills_block(skills, task)

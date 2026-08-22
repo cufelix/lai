@@ -447,26 +447,28 @@ def check_coders() -> Check:
 def check_virtual_display() -> Check:
     """Whether the agent can be given a screen of its own.
 
-    Optional: without it the agent shares your mouse, which is the right
-    default. With it, it can work while you carry on — and Xvfb is the one
-    worth having, because a nested Xephyr window still sits on your desktop.
+    This is how the agent works by default, so its absence is not a missing
+    nicety — it is the difference between an agent that works alongside you and
+    one that clicks into whatever window you just switched to.
     """
     from .osl.virtual import available  # noqa: PLC0415
 
     found = available()
     if "Xvfb" in found:
         return Check("virtual", "own screen (Xvfb)", OK,
-                     "available — `--virtual` runs off-screen", required=False)
+                     "the agent works off-screen; your desktop is its own", required=False)
     if found:
         return Check(
             "virtual", "own screen", WARN,
-            f"only {', '.join(found)} — nested, so it appears in a window on your desktop",
+            f"only {', '.join(found)} — nested, so the agent's screen appears "
+            "in a window on your desktop",
             fix=_install_fix("Xvfb", APT_PACKAGES["xvfb"]),
             required=False,
         )
     return Check(
         "virtual", "own screen", WARN,
-        "not installed — the agent shares your mouse and keyboard",
+        "not installed — so the agent has to share your mouse, keyboard and "
+        "window stack, and will click into whatever you switch to",
         fix=_install_fix("Xvfb", APT_PACKAGES["xvfb"]),
         required=False,
     )

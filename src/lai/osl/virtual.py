@@ -93,6 +93,8 @@ class VirtualDisplay:
     _server_process: object = field(default=None, repr=False)
     _wm_process: object = field(default=None, repr=False)
     _started: bool = False
+    _restore_display: object = field(default=None, repr=False)
+    """Whatever ``DISPLAY`` said before this server existed."""
 
     @property
     def running(self) -> bool:
@@ -121,6 +123,11 @@ class VirtualDisplay:
             )
         self.server = chosen
         self.display = self.display or free_display()
+        # Downstream libraries — Xlib, mss, GTK, AT-SPI, xdotool — are all
+        # steered by the process-wide DISPLAY, so opening a Desktop on this
+        # screen sets it. Remembering the old value is what stops the variable
+        # outliving the server and pointing everything at a dead socket.
+        self._restore_display = os.environ.get("DISPLAY")
 
         self._server_process = subprocess.Popen(  # noqa: S603
             _server_command(chosen, self.display, self.size, self.depth),
@@ -153,6 +160,17 @@ class VirtualDisplay:
             except Exception:
                 pass
         self._started = False
+        self._put_display_back()
+
+    def _put_display_back(self) -> None:
+        """Undo the environment change, so the next thing to look sees yours."""
+        if os.environ.get("DISPLAY") != self.display:
+            return  # somebody changed it since; not ours to reset
+        previous = self._restore_display
+        if previous is None:
+            os.environ.pop("DISPLAY", None)
+        else:
+            os.environ["DISPLAY"] = previous
 
     def screenshot(self):
         """A capture of this display, independent of whatever is on the real one."""

@@ -428,6 +428,9 @@ class LaiApp(App):
             f"[dim]{len(self.runtime.registry)} tools · {len(self.runtime.skills)} skills · "
             f"mode {self.runtime.config.safety.mode}[/dim]"
         )
+        note = getattr(self.runtime, "display_note", "")
+        if note:
+            self.write(f"[dim]{note}[/dim]")
 
         if self.runtime.provider is None:
             self.write("")

@@ -311,6 +311,9 @@ def _welcome(out, runtime) -> None:
         f"[dim]{info['name']}/{info['model']} · mode {runtime.config.safety.mode} · "
         f"{len(runtime.registry)} tools · {len(runtime.skills)} skills[/dim]"
     )
+    note = getattr(runtime, "display_note", "")
+    if note:
+        out.write(f"[dim]{note}[/dim]")
     standbys = info["chain"][1:]
     if standbys:
         out.write(f"[dim]failover ready: {' → '.join(standbys[:3])}[/dim]")

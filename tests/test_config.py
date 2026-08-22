@@ -215,3 +215,30 @@ def test_lai_home_env_moves_everything(monkeypatch, tmp_path):
     config = load_config()
     assert config.home == tmp_path / "custom"
     assert config.sessions_dir.parent == tmp_path / "custom"
+
+
+# -- whose screen the agent works on -------------------------------------
+
+
+def test_the_agent_gets_its_own_screen_unless_told_otherwise():
+    from lai.config import DesktopConfig
+
+    assert DesktopConfig().own_display == "auto"
+    assert DesktopConfig().watch is False
+
+
+def test_an_unknown_screen_mode_is_refused():
+    from lai.config import ConfigError, DesktopConfig
+
+    with pytest.raises(ConfigError, match="own_display"):
+        DesktopConfig(own_display="sometimes")
+
+
+def test_the_screen_settings_are_read_from_the_file(tmp_path):
+    from lai.config import load_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('[desktop]\nown_display = "never"\nwatch = true\n', encoding="utf-8")
+    config = load_config(path)
+    assert config.desktop.own_display == "never"
+    assert config.desktop.watch is True

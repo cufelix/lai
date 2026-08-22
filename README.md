@@ -280,7 +280,8 @@ script if you already have one. If a key is already in your environment,
 lai                             # setup if new, otherwise the chat interface
 lai --continue                  # pick up the last conversation
 lai do "<task>"                 # one autonomous run
-lai do "<task>" --virtual       # …on a screen of its own, so you keep yours
+lai do "<task>" --watch         # …with its screen shown in a window, so you can see it
+lai do "<task>" --here          # …on *your* desktop, for tasks about your open windows
 lai web                         # the same agent, in your browser
 lai tui                         # full-screen dashboard
 lai repl                        # plain interactive session
@@ -541,38 +542,51 @@ silent substitution. `LAI_DENY=anthropic` does the same for one run.
 
 ### A screen of its own
 
-By default LAI drives *your* desktop — one mouse, one focus, taken in turns.
-That is the right default: the point is acting on the machine you actually use.
-But when you would rather keep working, give it a screen of its own:
+**LAI works on its own desktop by default.** It starts a second X server with
+its own root window, its own pointer and its own focus. Applications it opens
+live there, screenshots come from there, and nothing it does reaches your
+keyboard, your clipboard or your window stack. You keep working; it keeps
+working; neither waits for the other.
+
+This is the default because the alternative is not a fair trade. Sharing one
+desktop means the agent's click lands in the window you just switched to, its
+typing goes wherever your focus went, and the thing it opens covers what you
+were reading. Taking turns makes that less frequent, not less annoying.
 
 ```bash
-lai do "open the calculator and work out 12 * 34" --virtual
+lai do "open the calculator and work out 12 * 34"   # its screen
+lai do "..." --watch                                # its screen, in a window on yours
+lai do "..." --here                                 # your desktop, taking turns
 ```
 
-It starts a second X server with its own root window, its own pointer and its
-own focus. Applications it launches live there, screenshots come from there,
-and nothing it does reaches your keyboard, your clipboard or your window stack.
-Two agents, two screens, no queueing — the desktop claim is per-display.
+Its screen starts empty, and applications on it have no session — no logged-in
+browser profile, no open documents. So a task *about the windows you have open*
+needs `--here`; the agent is told this and will say so rather than guessing.
+`lai observe` always reports your desktop, because that is the whole point of
+the command.
 
 | | |
 |---|---|
-| **Xvfb** | entirely off-screen. Watch through `lai web` or a screenshot, or don't watch at all. |
-| **Xephyr** | nested in a window on your desktop, so you can see it working. Good for the first few times. |
+| **Xvfb** | entirely off-screen. Watch through `lai web`, a screenshot, or not at all. |
+| **Xephyr** | nested in a window on your desktop — what `--watch` uses. |
 
-`lai doctor` says which you have and offers to install Xvfb. A window manager
-is started alongside, because without one applications have no decorations,
-cannot be maximised, and frequently never receive focus — which looks exactly
-like a broken agent.
+```toml
+[desktop]
+own_display = "auto"   # auto = its own screen when possible · always · never
+watch = false          # true to always show it in a window
+```
+
+`auto` falls back to your desktop and says so if no virtual X server is
+installed; `always` refuses to run rather than touch your session. `lai doctor`
+offers to install Xvfb. A window manager is started alongside, because without
+one applications have no decorations, cannot be maximised, and frequently never
+receive focus — which looks exactly like a broken agent.
 
 ### It gets out of your way
 
-A desktop agent shares one mouse with its owner. Two hands on it does not split
-the work — the agent's click lands in whatever window you just switched to, its
-typing goes into your document, and its next screenshot shows a desktop neither
-of you arranged.
-
-So before it touches the mouse or keyboard, LAI checks how long you have been
-still:
+When it *is* on your desktop — `--here`, or no virtual X server installed — one
+mouse is shared between two hands, and that does not split the work. So before
+it touches the mouse or keyboard, LAI checks how long you have been still:
 
 ```
 ▸ computer_click {"x": 812, "y": 344}
@@ -587,7 +601,8 @@ whose X server cannot report idle time, the agent works normally rather than
 refusing to move.
 
 `[safety] yield_to_user = false` turns it off; `user_idle_seconds` sets how
-still you have to be.
+still you have to be. On its own screen none of this applies — there is nothing
+to take turns over.
 
 ### Permission modes
 
