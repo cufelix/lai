@@ -378,7 +378,7 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_note(state, path)
             return
 
-        if path in ("/provider", "/mode"):
+        if path in ("/provider", "/mode", "/desktop"):
             from ..chat import backends as backend_tools  # noqa: PLC0415
 
             body = self._read_json()
@@ -393,6 +393,8 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     backend_tools.save(runtime.config, {"learning": {"enabled": enabled, "reflect": enabled}})
                     self._send(200, {"learning": enabled})
+                elif path == "/desktop":
+                    self._send(200, self._set_desktop(body))
                 elif path == "/mode":
                     self._send(200, {"mode": backend_tools.set_mode(state.runtime, str(body.get("mode", "")))})
                 elif body.get("fallback") is not None:
@@ -478,7 +480,9 @@ class Handler(BaseHTTPRequestHandler):
             with state.lock:
                 state.completed += 1 if result.ok else 0
                 state.failed += 0 if result.ok else 1
-            self._send(200, result.to_dict())
+            payload = result.to_dict()
+            payload["handover"] = _hand_over(state.runtime, result)
+            self._send(200, payload)
         except DesktopBusy as exc:
             # Another process holds the desktop; 409 is what the caller already
             # handles for "somebody else is running something".
@@ -530,6 +534,8 @@ class Handler(BaseHTTPRequestHandler):
             with state.lock:
                 state.completed += 1 if result.ok else 0
                 state.failed += 0 if result.ok else 1
+            for handoff in _hand_over(state.runtime, result):
+                emit("handover", handoff)
             emit("result", result.to_dict())
         except Exception as exc:
             emit("error", {"error": type(exc).__name__, "message": str(exc)})
@@ -558,6 +564,40 @@ class Handler(BaseHTTPRequestHandler):
             "auth_required": bool(state.token),
         }
 
+    def _set_desktop(self, body: dict) -> dict:
+        """Change which screen the agent works on.
+
+        Written to the config and applied to this runtime, but not retroactive:
+        a display is started when the daemon starts, so switching between its
+        own screen and yours takes effect the next time it does.
+        """
+        from dataclasses import replace as _replace  # noqa: PLC0415
+
+        from ..chat import backends as backend_tools  # noqa: PLC0415
+        from ..config import OWN_DISPLAY_MODES  # noqa: PLC0415
+
+        state: DaemonState = self.server.state  # type: ignore[attr-defined]
+        runtime = state.runtime
+        desktop = runtime.config.desktop
+        changed: dict = {}
+
+        if "own_display" in body:
+            wanted = str(body["own_display"]).strip().lower()
+            if wanted not in OWN_DISPLAY_MODES:
+                raise ValueError(f"own_display must be one of {', '.join(OWN_DISPLAY_MODES)}")
+            desktop = _replace(desktop, own_display=wanted)
+            changed["own_display"] = wanted
+        for flag in ("watch", "handover"):
+            if flag in body:
+                value = bool(body[flag])
+                desktop = _replace(desktop, **{flag: value})
+                changed[flag] = value
+
+        runtime.config = runtime.config.with_overrides(desktop=desktop)
+        if changed:
+            backend_tools.save(runtime.config, {"desktop": changed})
+        return {"desktop": changed, "restart_required": bool(changed)}
+
     def _status(self) -> dict:
         state: DaemonState = self.server.state  # type: ignore[attr-defined]
         runtime = state.runtime
@@ -581,11 +621,37 @@ class Handler(BaseHTTPRequestHandler):
                 and runtime.config.learning.enabled,
                 "notes": len(runtime.journal.list()) if getattr(runtime, "journal", None) else 0,
             },
+            "desktop": {
+                "own_display": runtime.config.desktop.own_display,
+                "watch": runtime.config.desktop.watch,
+                "handover": runtime.config.desktop.handover,
+                # Which screen this daemon is actually on, which is not always
+                # what the configuration asked for — Xvfb may not be installed.
+                "note": getattr(runtime, "display_note", ""),
+                "separate": getattr(runtime, "virtual_display", None) is not None,
+            },
             "tools": len(runtime.registry),
             "skills": len(runtime.skills),
             "mcp_tools": len(runtime.mcp_tools),
             "config": runtime.config.redacted(),
         }
+
+
+def _hand_over(runtime, result) -> list[dict]:
+    """Reopen what the agent left, on the human's desktop.
+
+    The browser is where somebody is *least* able to reach the agent's screen,
+    so it is where this matters most — the run finishing is otherwise the
+    moment its work disappears.
+    """
+    try:
+        opened, _problem = runtime.hand_over(getattr(result, "artifacts", ()))
+    except Exception:
+        return []
+    # Not "kind": the event envelope uses that name for the event, and a
+    # payload key of the same name silently overwrites it — the browser got
+    # `kind: "url"` and dropped the message on the floor.
+    return [{"what": h.kind, "target": h.target, "source": h.source} for h in opened]
 
 
 def _start_scheduler(runtime, state: DaemonState):

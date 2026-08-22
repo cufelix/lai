@@ -338,3 +338,32 @@ def test_the_off_screen_server_does_not_touch_your_focus(monkeypatch):
     monkeypatch.setattr("lai.osl.windows.WindowManager", explode)
     _fake_start(monkeypatch)
     VirtualDisplay(display=":90", server="Xvfb").start()
+
+
+def test_the_server_is_asked_to_die_with_its_parent(monkeypatch):
+    """`stop()` only runs on an orderly exit. Kill the process holding a
+    display and the X server outlives it with nothing left that knows the
+    number — six accumulated on one machine in an afternoon."""
+    seen = []
+
+    def popen(command, **kwargs):
+        seen.append(kwargs.get("preexec_fn"))
+        return FakeProcess()
+
+    monkeypatch.setattr("lai.osl.virtual.shutil.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(os.path, "exists", lambda path: "X11-unix" in path)
+    monkeypatch.setattr("lai.osl.virtual.time.sleep", lambda seconds: None)
+
+    VirtualDisplay(display=":90").start()
+    from lai.osl.virtual import _die_with_parent
+
+    assert seen == [_die_with_parent, _die_with_parent], "the server and its window manager"
+
+
+def test_asking_the_kernel_never_raises():
+    """On anything but Linux this is unavailable, and a leaked server beats a
+    failed launch."""
+    from lai.osl.virtual import _die_with_parent
+
+    _die_with_parent()

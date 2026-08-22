@@ -110,28 +110,43 @@ class LaunchResult:
 # display that is fatal — the process starts, the window appears on *your*
 # desktop or nowhere at all, and the launcher reports "no window appeared".
 # These are the flags that make a second, independent instance.
+_CHROMIUM = (
+    "--user-data-dir={profile}",
+    "--no-first-run",
+    "--no-default-browser-check",
+    # Without this a Chromium window is a single opaque rectangle to AT-SPI —
+    # not the page, not even the address bar. The agent is reduced to reading
+    # pixels, and the handover at the end of a run cannot tell what page was
+    # open. It costs some memory and buys the whole accessibility tree.
+    "--force-renderer-accessibility",
+)
+
 BROWSER_ISOLATION: dict[str, tuple[str, ...]] = {
     "firefox": ("--no-remote", "--profile", "{profile}"),
     "firefox-esr": ("--no-remote", "--profile", "{profile}"),
     "librewolf": ("--no-remote", "--profile", "{profile}"),
     "waterfox": ("--no-remote", "--profile", "{profile}"),
-    "google-chrome": ("--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"),
-    "google-chrome-stable": (
-        "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-    ),
-    "chromium": ("--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"),
-    "chromium-browser": (
-        "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-    ),
-    "brave-browser": ("--user-data-dir={profile}", "--no-first-run"),
-    "microsoft-edge": ("--user-data-dir={profile}", "--no-first-run"),
-    "vivaldi": ("--user-data-dir={profile}", "--no-first-run"),
-    "opera": ("--user-data-dir={profile}",),
+    "google-chrome": _CHROMIUM,
+    "google-chrome-stable": _CHROMIUM,
+    "chromium": _CHROMIUM,
+    "chromium-browser": _CHROMIUM,
+    "brave-browser": _CHROMIUM,
+    "microsoft-edge": _CHROMIUM,
+    "vivaldi": _CHROMIUM,
+    "opera": _CHROMIUM,
 }
 
 
-def isolate_browser(command: list[str], profile_root: Path) -> list[str]:
+def isolate_browser(
+    command: list[str], profile_root: Path, *, already_running: bool = False
+) -> list[str]:
     """Command that starts its *own* browser, not a message to somebody else's.
+
+    ``already_running`` matters for the Firefox family: ``--no-remote`` is what
+    stops it handing the URL to the copy on your desktop, but it also refuses
+    to start a *second* copy on this profile — so once one is up on this
+    screen, the URL should go to that one. Chromium needs no such care: the
+    same ``--user-data-dir`` reaches the same instance either way.
 
     Left alone if it is not a browser, or if the caller already said which
     profile to use — an explicit choice outranks this one.
@@ -148,6 +163,8 @@ def isolate_browser(command: list[str], profile_root: Path) -> list[str]:
 
     profile = profile_root / binary
     profile.mkdir(parents=True, exist_ok=True)
+    if already_running:
+        flags = tuple(flag for flag in flags if flag != "--no-remote")
     extra = [flag.format(profile=str(profile)) for flag in flags]
     # Flags go before the URL: Chrome ignores switches that follow a positional.
     return [command[0], *extra, *command[1:]]
@@ -219,6 +236,18 @@ class AppLauncher:
 
     # -- launching -------------------------------------------------------
 
+    def _has_window_for(self, binary: str) -> bool:
+        """Whether this program already has a window on this display."""
+        name = Path(binary).name.lower()
+        stem = name.split("-")[0]
+        try:
+            return any(
+                stem in (window.wm_class or "").lower()
+                for window in self._wm.list_windows()
+            )
+        except Exception:
+            return False
+
     def launch(
         self,
         query: str,
@@ -244,7 +273,10 @@ class AppLauncher:
         if not command:
             raise LaiError(f"application {query!r} has no runnable command")
         if self.browser_profile is not None:
-            command = isolate_browser(command, self.browser_profile)
+            command = isolate_browser(
+                command, self.browser_profile,
+                already_running=self._has_window_for(command[0]),
+            )
 
         before = {w.id for w in self._safe_window_ids()}
         env = {**os.environ, "GDK_BACKEND": os.environ.get("GDK_BACKEND", "x11")}

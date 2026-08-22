@@ -393,3 +393,67 @@ def test_the_launcher_leaves_browsers_alone_on_your_own_desktop(tmp_path):
     from lai.osl.apps import AppLauncher
 
     assert AppLauncher(window_manager=object()).browser_profile is None
+
+
+def test_a_second_firefox_on_this_screen_reuses_the_first(tmp_path):
+    """`--no-remote` is what stops Firefox handing the URL to the copy on your
+    desktop — and it also refuses to start a second copy on this profile. Once
+    one is up on the agent's screen, the URL belongs to that one."""
+    from lai.osl.apps import isolate_browser
+
+    command = isolate_browser(
+        ["/usr/bin/firefox", "https://x.test"], tmp_path, already_running=True
+    )
+    assert "--no-remote" not in command
+    assert str(tmp_path / "firefox") in command, "still its own profile, not yours"
+
+
+def test_chromium_needs_no_such_care(tmp_path):
+    """The same --user-data-dir reaches the same instance either way."""
+    from lai.osl.apps import isolate_browser
+
+    fresh = isolate_browser(["/usr/bin/chromium"], tmp_path)
+    again = isolate_browser(["/usr/bin/chromium"], tmp_path, already_running=True)
+    assert fresh == again
+
+
+def test_the_launcher_asks_whether_a_window_is_already_there(tmp_path):
+    from lai.osl.apps import AppLauncher
+
+    class Windows:
+        def __init__(self, classes):
+            self.classes = classes
+
+        def list_windows(self):
+            return [type("W", (), {"wm_class": c})() for c in self.classes]
+
+    launcher = AppLauncher(Windows(["firefox", "Gnome-terminal"]), browser_profile=tmp_path)
+    assert launcher._has_window_for("/usr/bin/firefox") is True
+    assert launcher._has_window_for("/usr/bin/google-chrome-stable") is False
+
+
+def test_a_broken_window_list_does_not_stop_a_launch(tmp_path):
+    from lai.osl.apps import AppLauncher
+
+    class Broken:
+        def list_windows(self):
+            raise RuntimeError("x server gone")
+
+    assert AppLauncher(Broken(), browser_profile=tmp_path)._has_window_for("firefox") is False
+
+
+def test_chromium_is_launched_with_its_accessibility_tree_on(tmp_path):
+    """Without it a Chromium window is one opaque rectangle to AT-SPI — not
+    the page, not even the address bar. The agent is reduced to reading pixels,
+    and the handover cannot tell what page was open."""
+    from lai.osl.apps import isolate_browser
+
+    for binary in ("google-chrome-stable", "chromium", "brave-browser", "microsoft-edge"):
+        command = isolate_browser([f"/usr/bin/{binary}"], tmp_path)
+        assert "--force-renderer-accessibility" in command, binary
+
+
+def test_firefox_needs_no_such_flag(tmp_path):
+    from lai.osl.apps import isolate_browser
+
+    assert "--force-renderer-accessibility" not in isolate_browser(["/usr/bin/firefox"], tmp_path)

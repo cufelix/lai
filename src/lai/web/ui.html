@@ -109,6 +109,12 @@
     white-space: nowrap;
   }
   .chip.live { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .tokenrow { display: flex; gap: calc(var(--step) * 2); margin-top: calc(var(--step) * 2); }
+  .tokenfield {
+    flex: 1; min-width: 0; font: inherit; padding: calc(var(--step) * 1.5) calc(var(--step) * 2);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--bg); color: var(--ink);
+  }
   .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
   .iconbtn {
     all: unset;
@@ -129,7 +135,7 @@
   /* -- layout ------------------------------------------------------------ */
 
   main { display: grid; grid-template-columns: 1fr; overflow: hidden; min-height: 0; }
-  main.with-screen { grid-template-columns: minmax(0, 1fr) 380px; }
+  main.with-screen { grid-template-columns: minmax(0, 1fr) minmax(380px, 34vw); }
   @media (max-width: 900px) {
     main.with-screen { grid-template-columns: 1fr; }
     aside { display: none; }
@@ -389,14 +395,16 @@
   <div id="feed" class="page" data-page="chat">
     <div class="stream" id="stream">
       <div class="empty" id="empty">
-        <h1>Your desktop, driven.</h1>
+        <h1>A desktop it can actually use.</h1>
         <p>Say what you want done. LAI opens the real applications on this machine,
            reads their interfaces, clicks their buttons — and checks the result
-           before telling you it is finished.</p>
+           before telling you it is finished. It works on a screen of its own, so
+           you can carry on with yours; when a task ends, the pages and files it
+           produced open on your desktop.</p>
         <div class="examples">
-          <button data-task="what windows do I have open?">what windows do I have open?</button>
           <button data-task="open the calculator and work out 12 * 34">open the calculator and work out 12 × 34</button>
-          <button data-task="take a screenshot and tell me what you see">take a screenshot and tell me what you see</button>
+          <button data-task="open a browser, find today's weather here, and tell me what it says">open a browser and find today&rsquo;s weather</button>
+          <button data-task="open a text editor and write me a haiku about X11">write me a haiku in a text editor</button>
         </div>
       </div>
     </div>
@@ -466,6 +474,37 @@
       </select>
     </div>
 
+    <h2 style="margin-top:1.4rem">Desktop</h2>
+    <p class="sub" id="screenNote" style="margin:0 0 .4rem"></p>
+
+    <div class="row">
+      <div class="grow"><b>Whose screen</b>
+        <span class="sub">a desktop of its own means it never clicks into your windows</span></div>
+      <select id="ownDisplaySelect">
+        <option value="auto">its own — falls back to yours if it cannot</option>
+        <option value="always">its own, or refuse to run</option>
+        <option value="never">yours — taking turns while you use the mouse</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div class="grow"><b>Watching it</b>
+        <span class="sub">its screen in a window on yours, which you can minimise</span></div>
+      <select id="watchSelect">
+        <option value="on">show it in a window</option>
+        <option value="off">off-screen entirely</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div class="grow"><b>Handover</b>
+        <span class="sub">when a task ends, reopen the pages and files it produced on your desktop</span></div>
+      <select id="handoverSelect">
+        <option value="on">bring the work to me</option>
+        <option value="off">leave it there</option>
+      </select>
+    </div>
+
     <h2 style="margin-top:1.4rem">Backends</h2>
     <p class="sub" style="margin:0 0 .4rem">The one in use answers; the rest stand by, in this order.</p>
     <div id="backends"></div>
@@ -482,9 +521,9 @@
   </section>
 
   <aside id="side" hidden>
-    <h2>Desktop</h2>
-    <img id="screen" alt="live view of the desktop">
-    <p class="sub" style="margin-top:.5rem">Refreshes while the agent works.</p>
+    <h2 id="sideTitle">Desktop</h2>
+    <img id="screen" alt="live view of the desktop the agent is working on">
+    <p class="sub" id="sideNote" style="margin-top:.5rem">Refreshes while the agent works.</p>
   </aside>
 </main>
 
@@ -511,7 +550,12 @@
   // sessionStorage — scoped to this tab and dropped when the tab closes — so
   // that reloading the page does not silently lock the user out.
   const KEY = "lai.token";
-  const fromHash = decodeURIComponent((location.hash || "").replace(/^#/, "")).trim();
+  // `#<token>` is what `lai web` writes, but `#token=<token>` is what anybody
+  // reconstructing the URL by hand types, and silently treating that as a
+  // token spells the whole thing wrong.
+  const readHash = () =>
+    decodeURIComponent((location.hash || "").replace(/^#/, "").replace(/^token=/i, "")).trim();
+  const fromHash = readHash();
   if (fromHash) {
     try { sessionStorage.setItem(KEY, fromHash); } catch { /* private mode */ }
     history.replaceState(null, "", location.pathname);
@@ -519,6 +563,15 @@
   let stored = "";
   try { stored = sessionStorage.getItem(KEY) || ""; } catch { stored = ""; }
   const token = fromHash || stored;
+
+  // A fragment pasted into a page that is already open changes nothing on its
+  // own — same-document navigation does not re-run any of this.
+  addEventListener("hashchange", () => {
+    const pasted = readHash();
+    if (!pasted || pasted === token) return;
+    try { sessionStorage.setItem(KEY, pasted); } catch { /* private mode */ }
+    location.replace(location.pathname);
+  });
 
   const $ = (id) => document.getElementById(id);
   const feed = $("feed"), stream = $("stream"), input = $("input"), composer = $("composer");
@@ -675,6 +728,10 @@
       case "repeating":
         put(el("div", "note switch", `↺ refused a repeated ${event.name} — it failed the same way twice`));
         break;
+      case "handover":
+        put(el("div", "note",
+          `→ opened on your desktop: ${event.target}${event.source ? " (from " + event.source + ")" : ""}`));
+        break;
       case "no_vision":
         put(el("div", "note switch",
           `◌ ${event.model || "this model"} cannot see images — reading the screen with OCR instead`));
@@ -767,16 +824,57 @@
       $("fallbackSelect").value = (provider.fallback || []).length ? "auto" : "off";
       const learning = status.learning || {};
       $("learningSelect").value = learning.enabled ? "on" : "off";
+      const desk = status.desktop || {};
+      $("ownDisplaySelect").value = desk.own_display || "auto";
+      $("watchSelect").value = desk.watch ? "on" : "off";
+      $("handoverSelect").value = desk.handover ? "on" : "off";
+      if (desk.note && !$("screenNote").dataset.saved) $("screenNote").textContent = desk.note;
+      $("sideTitle").textContent = desk.separate ? "The agent's screen" : "Your desktop";
+      $("sideNote").textContent = desk.separate
+        ? (status.busy ? "Its own display — nothing here touches your windows."
+                       : "Its own display. What it produces comes to you when a task ends.")
+        : "It is working on your desktop, taking turns with you.";
       $("learningSub").textContent = learning.enabled
         ? `keeping notes about this machine — ${learning.notes || 0} so far`
         : "not writing new notes; existing ones are still read";
     } catch { $("who").textContent = "daemon unreachable"; }
   }
 
+  // Two different problems wearing one message. A page opened by hand has no
+  // credentials; a page holding a token from a previous daemon has the wrong
+  // ones — and saying "no token" to somebody looking at a token in their own
+  // URL bar sends them nowhere. Worse, the bad one is remembered, so there was
+  // no way out of it but clearing site data.
+  let toldOff = false;
   function unauthorised() {
-    $("who").textContent = "no token";
-    put(el("div", "note error",
-      "This page has no token. Start it with `lai web`, which opens the URL that carries one."));
+    $("who").textContent = token ? "token rejected" : "no token";
+    if (toldOff) return;
+    toldOff = true;
+
+    const box = el("div", "note error");
+    box.append(token
+      ? "This page's token was refused — it is probably from an earlier `lai web`. "
+      : "This page has no token. `lai web` opens the URL that carries one. ");
+    box.append("Paste the contents of ~/.lai/daemon.token to carry on:");
+
+    const field = el("input");
+    field.type = "password";
+    field.placeholder = "daemon token";
+    field.className = "tokenfield";
+    const button = el("button", "iconbtn", "use it");
+    button.addEventListener("click", () => {
+      const typed = field.value.trim();
+      if (!typed) return;
+      try { sessionStorage.setItem(KEY, typed); } catch { /* private mode */ }
+      location.replace(location.pathname);
+    });
+    field.addEventListener("keydown", (e) => { if (e.key === "Enter") button.click(); });
+
+    const row = el("div", "tokenrow");
+    row.append(field, button);
+    box.append(row);
+    put(box);
+    field.focus();
   }
 
   let screenOn = false;
@@ -864,6 +962,18 @@
     refreshStatus();
   });
 
+  // Which screen the agent works on. A display is started when the daemon
+  // starts, so these take effect next time — saying so beats letting someone
+  // wonder why nothing moved.
+  const desktopSetting = (id, key, read) => $(id).addEventListener("change", async (e) => {
+    await api("/desktop", { method: "POST", body: JSON.stringify({ [key]: read(e.target.value) }) });
+    $("screenNote").textContent = "Saved. Takes effect the next time LAI starts.";
+    refreshStatus();
+  });
+  desktopSetting("ownDisplaySelect", "own_display", (v) => v);
+  desktopSetting("watchSelect", "watch", (v) => v === "on");
+  desktopSetting("handoverSelect", "handover", (v) => v === "on");
+
   // -- the learning journal ------------------------------------------------
   let notes = [], current = null;
 
@@ -949,8 +1059,22 @@
   refreshStatus();
   setInterval(() => { if (screenOn) refreshScreen(); }, running ? 1500 : 4000);
   setInterval(() => { if (screenOn && running) refreshScreen(); }, 1500);
-  try {
-    if (sessionStorage.getItem("lai.screen")) $("screenToggle").click();
-  } catch { /* private mode */ }
+  // The agent works on a desktop of its own now, and on a wide window the
+  // single most useful thing to put in the empty half is that desktop. Opened
+  // by default the first time, then remembered — including remembering that
+  // somebody closed it.
+  (async () => {
+    let choice = null;
+    try { choice = sessionStorage.getItem("lai.screen"); } catch { /* private mode */ }
+    if (choice !== null) {
+      if (choice) $("screenToggle").click();
+      return;
+    }
+    if (innerWidth < 1100) return;
+    try {
+      const status = await (await api("/status")).json();
+      if ((status.desktop || {}).separate) $("screenToggle").click();
+    } catch { /* no daemon, no screen */ }
+  })();
 })();
 </script>

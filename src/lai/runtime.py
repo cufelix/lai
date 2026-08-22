@@ -120,7 +120,15 @@ class Runtime:
             found = collect(self.desktop, artifacts=artifacts)
         except Exception as exc:
             return [], f"could not read the agent's screen: {exc}"
-        return deliver(found, display=getattr(screen, "host_display", ""))
+
+        # A browser left open stays open, so every later task would find the
+        # same page and reopen it — a tab a run in this session already handed
+        # over is not new work.
+        already = self.extra.setdefault("handed_over", set())
+        fresh = [handoff for handoff in found if handoff.target not in already]
+        opened, problem = deliver(fresh, display=getattr(screen, "host_display", ""))
+        already.update(handoff.target for handoff in opened)
+        return opened, problem
 
     def close(self) -> None:
         for closer in (
@@ -169,7 +177,13 @@ def build_runtime(
         # On its own screen a browser must be given its own profile, or it
         # simply hands the request to the copy already running on yours and
         # exits — which reads as "the application would not start".
-        browser_profile=Path(config.home) / "browser" if screen is not None else None,
+        # Keyed by display: a browser left running on a screen that has since
+        # gone takes the singleton lock on a shared profile with it, and every
+        # later launch is quietly handed to a window nobody can see.
+        browser_profile=(
+            Path(config.home) / "browser" / screen.display.lstrip(":")
+            if screen is not None else None
+        ),
     )
 
     policy = PolicyEngine(

@@ -576,9 +576,18 @@ and dies with the server. What was *in* it can:
 
 Pages the agent had open are read out of the address bar (matched on the value,
 so it works in any language) and files the run wrote are reopened, both through
-`xdg-open` on your display. Unsaved state in an editor is not reconstructed:
-that is gone when the server stops, and pretending otherwise would be worse
-than saying so. `[desktop] handover = false` turns it off.
+`xdg-open` on your display. Something already handed over is not sent again,
+because a browser left open stays open and every later task would find the same
+page. Unsaved state in an editor is not reconstructed: that is gone when the
+server stops, and pretending otherwise would be worse than saying so.
+`[desktop] handover = false` turns it off.
+
+Browsers the agent launches on its own screen get their own profile
+(`--no-remote --profile`, or `--user-data-dir`) — without it they hand the URL
+to the copy running on *your* desktop and exit, and every browser task is
+unwinnable. Chromium is also started with `--force-renderer-accessibility`,
+without which its window is a single opaque rectangle to AT-SPI: no page, not
+even the address bar.
 
 By default that screen is shown in a window on yours (Xephyr), so you can watch
 it work. The window is deliberately unobtrusive: it does not take focus when it

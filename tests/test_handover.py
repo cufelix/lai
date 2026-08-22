@@ -193,3 +193,87 @@ def test_handover_can_be_switched_off(tmp_path):
     runtime.virtual_display = object()
     runtime.config = config.with_overrides(desktop=replace(config.desktop, handover=False))
     assert runtime.hand_over(["/tmp/x"]) == ([], "")
+
+
+def test_the_browser_profile_is_kept_per_display(tmp_path, monkeypatch):
+    """A browser left running on a screen that has since gone takes the
+    singleton lock with it, and every later launch is quietly handed to a
+    window nobody can see."""
+    from lai import runtime as runtime_module
+    from lai.config import load_config
+
+    seen = {}
+
+    class FakeScreen:
+        display = ":95"
+
+        def start(self):
+            return self.display
+
+    monkeypatch.setattr(runtime_module, "_own_screen",
+                        lambda config, wanted: (FakeScreen(), "on :95"))
+    monkeypatch.setattr(runtime_module, "Desktop",
+                        lambda **kwargs: seen.update(kwargs) or FakeDesktop([]))
+    try:
+        runtime_module.build_runtime(
+            load_config().with_overrides(home=tmp_path),
+            with_provider=False, with_mcp=False,
+        )
+    except Exception:
+        pass  # the rest of the runtime is not what is under test here
+    assert str(seen["browser_profile"]).endswith("browser/95")
+
+
+def test_the_same_page_is_not_handed_over_after_every_later_task(tmp_path, monkeypatch):
+    """A browser left open stays open, so every later run finds the same page.
+    Reopening a tab somebody already has is not delivering new work."""
+    from lai.config import load_config
+    from lai.runtime import Runtime
+
+    delivered: list = []
+    monkeypatch.setattr(
+        "lai.osl.handover.deliver",
+        lambda handoffs, display="": (delivered.extend(handoffs), (handoffs, ""))[1],
+    )
+    monkeypatch.setattr(
+        "lai.osl.handover.collect",
+        lambda desktop, artifacts=(): [Handoff("url", "https://jspaint.app", "firefox")],
+    )
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.virtual_display = type("S", (), {"host_display": ":0"})()
+    runtime.config = load_config().with_overrides(home=tmp_path)
+    runtime.desktop = FakeDesktop([])
+    runtime.extra = {}
+
+    first, _ = runtime.hand_over()
+    second, _ = runtime.hand_over()
+    assert [h.target for h in first] == ["https://jspaint.app"]
+    assert second == [], "the same tab, a second time, is not new work"
+    assert len(delivered) == 1
+
+
+def test_something_new_still_comes_across(tmp_path, monkeypatch):
+    from lai.config import load_config
+    from lai.runtime import Runtime
+
+    pages = [
+        [Handoff("url", "https://a.test")],
+        [Handoff("url", "https://a.test"), Handoff("url", "https://b.test")],
+    ]
+    monkeypatch.setattr(
+        "lai.osl.handover.deliver", lambda handoffs, display="": (handoffs, "")
+    )
+    monkeypatch.setattr(
+        "lai.osl.handover.collect", lambda desktop, artifacts=(): pages.pop(0)
+    )
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.virtual_display = type("S", (), {"host_display": ":0"})()
+    runtime.config = load_config().with_overrides(home=tmp_path)
+    runtime.desktop = FakeDesktop([])
+    runtime.extra = {}
+
+    runtime.hand_over()
+    second, _ = runtime.hand_over()
+    assert [h.target for h in second] == ["https://b.test"]

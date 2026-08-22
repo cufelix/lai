@@ -435,3 +435,87 @@ def test_state_replace_is_immutable_on_config(tmp_path, monkeypatch):
     changed = config.with_overrides(safety=replace(config.safety, mode="yolo"))
     assert config.safety.mode == "ask", "the original must not be mutated"
     assert changed.safety.mode == "yolo"
+
+
+# -- which screen the agent works on -------------------------------------
+
+
+def test_the_desktop_settings_can_be_changed_over_http(daemon):
+    """The defining behaviour of the agent, and it was unreachable from the
+    browser: you could only edit config.toml by hand."""
+    response = httpx.post(
+        f"{daemon['url']}/desktop", headers=auth(), timeout=5,
+        json={"own_display": "never", "watch": False},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["desktop"] == {"own_display": "never", "watch": False}
+    assert body["restart_required"] is True
+
+    status = httpx.get(f"{daemon['url']}/status", headers=auth(), timeout=5).json()
+    assert status["desktop"]["own_display"] == "never"
+    assert status["desktop"]["watch"] is False
+
+
+def test_an_unknown_screen_mode_is_refused(daemon):
+    response = httpx.post(
+        f"{daemon['url']}/desktop", headers=auth(), timeout=5,
+        json={"own_display": "sometimes"},
+    )
+    assert response.status_code == 400
+    assert "own_display" in response.json()["message"]
+
+
+def test_the_status_says_which_screen_it_actually_got(daemon):
+    """What was asked for and what was available are not always the same —
+    Xvfb may not be installed."""
+    desktop = httpx.get(f"{daemon['url']}/status", headers=auth(), timeout=5).json()["desktop"]
+    assert set(desktop) >= {"own_display", "watch", "handover", "note", "separate"}
+
+
+def test_a_finished_run_hands_its_work_over(daemon, monkeypatch):
+    """The browser is where somebody is least able to reach the agent's own
+    screen, so it is where the run finishing otherwise loses its work."""
+    from lai.osl.handover import Handoff
+
+    state = daemon["state"]
+    state.runtime.hand_over = lambda artifacts=(): (
+        [Handoff("url", "https://jspaint.app", "firefox")], ""
+    )
+    response = httpx.post(
+        f"{daemon['url']}/task", headers=auth(), timeout=20,
+        json={"task": "draw something", "stream": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["handover"] == [
+        {"what": "url", "target": "https://jspaint.app", "source": "firefox"}
+    ]
+
+
+def test_a_broken_handover_does_not_fail_the_run(daemon):
+    def explode(artifacts=()):
+        raise RuntimeError("x server already gone")
+
+    daemon["state"].runtime.hand_over = explode
+    response = httpx.post(
+        f"{daemon['url']}/task", headers=auth(), timeout=20,
+        json={"task": "do a thing", "stream": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["handover"] == []
+
+
+def test_an_event_payload_never_shadows_the_event_name(daemon):
+    """`{"kind": kind, **payload}` lets a payload key called `kind` overwrite
+    the event name. The browser received `kind: "url"` for a handover and
+    dropped it."""
+
+    from lai.daemon import server as module
+    from lai.osl.handover import Handoff
+
+    payload = module._hand_over(
+        type("R", (), {"hand_over": lambda self, artifacts=(): ([Handoff("url", "x")], "")})(),
+        type("Result", (), {"artifacts": ()})(),
+    )
+    assert "kind" not in payload[0], "it would overwrite the event name in the envelope"
+    assert payload[0]["what"] == "url"

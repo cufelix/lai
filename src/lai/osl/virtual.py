@@ -141,6 +141,7 @@ class VirtualDisplay:
             _server_command(chosen, self.display, self.size, self.depth),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            preexec_fn=_die_with_parent,  # noqa: PLW1509 - see the function
         )
         self._started = True
         try:
@@ -219,6 +220,7 @@ class VirtualDisplay:
                     env=self.env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    preexec_fn=_die_with_parent,  # noqa: PLW1509 - see the function
                 )
             except OSError:
                 continue
@@ -259,6 +261,28 @@ def _server_command(server: str, display: str, size: tuple, depth: int) -> list[
         "-title", WATCH_TITLE,
         "-name", WATCH_CLASS,
     ]
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to kill this child when its parent dies.
+
+    ``stop()`` handles the ordinary case, but it only runs on an orderly exit.
+    Kill the process holding a display — Ctrl+C at the wrong moment, a SIGKILL,
+    a crash — and the X server it started outlives it with nothing left that
+    knows the number, forever. Six of them accumulated on this machine in an
+    afternoon. PR_SET_PDEATHSIG closes that hole in the kernel, where it cannot
+    be skipped.
+
+    Best effort: on anything but Linux this is simply not available, and a
+    leaked server is better than a failed launch.
+    """
+    try:
+        import ctypes  # noqa: PLC0415
+        import signal as signals  # noqa: PLC0415
+
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signals.SIGTERM)
+    except Exception:
+        pass
 
 
 def _focused_window():
