@@ -5,7 +5,7 @@ window tree and the screen, acts on it through real input events and semantic
 accessibility actions, and runs an autonomous observe-act-verify loop over it.
 """
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 from .config import Config, load_config
 from .errors import LaiError
