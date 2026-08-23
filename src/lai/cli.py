@@ -53,6 +53,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "channels": ("connect", "Manage remote connectors and who may use them"),
     "schedule": ("connect", "Recurring tasks, run by `lai serve`"),
     "mcp": ("connect", "Expose desktop tools over MCP to Claude Code"),
+    "connect": ("connect", "Lend the desktop to opencode or Claude Code, in one command"),
 }
 EXAMPLES = [
     ("lai", "the chat interface — say what you want, watch it happen"),
@@ -918,6 +919,62 @@ def _daemon_is_up(host: str, port: int) -> bool:
         return False
 
 
+def cmd_connect(args) -> int:
+    """Lend LAI's hands to another agent that speaks MCP."""
+    from . import connect as wiring  # noqa: PLC0415
+
+    out = Out()
+    if not args.client:
+        out.write("[bold]Agents that can borrow this desktop[/bold]")
+        for client in wiring.clients():
+            state = wiring.status(client)
+            mark = {"connected": "[green]✓[/green]", "absent": "[dim]·[/dim]",
+                    "missing": "[dim]·[/dim]"}[state]
+            note = {"connected": "connected", "absent": "not connected",
+                    "missing": "not installed"}[state]
+            out.write(f"  {mark} [cyan]{client.name:<10}[/cyan] [dim]{note} — {client.config}[/dim]")
+        out.write("")
+        out.write("[dim]`lai connect opencode` wires it up. They get the desktop tools;[/dim]")
+        out.write("[dim]LAI keeps its own loop for `lai` itself.[/dim]")
+        return 0
+
+    client = wiring.get(args.client)
+    if client is None:
+        names = ", ".join(c.name for c in wiring.clients())
+        out.error(f"unknown client {args.client!r} — known: {names}")
+        return 2
+
+    if args.remove:
+        if wiring.disconnect(client):
+            out.write(f"[green]✓[/green] removed LAI from {client.label}")
+        else:
+            out.write(f"[dim]{client.label} was not connected[/dim]")
+        return 0
+
+    if not client.installed:
+        out.write(f"[yellow]{client.label} does not appear to be installed[/yellow]")
+        out.write("[dim]writing the config anyway; it will work once it is[/dim]")
+
+    path = wiring.connect(client)
+    out.write(f"[green]✓[/green] {client.label} can now drive this desktop")
+    out.write(f"  [dim]{path}[/dim]")
+    out.write("")
+    out.write(f"[dim]It gets all {_tool_count()} desktop tools, with LAI's safety gate still[/dim]")
+    out.write("[dim]in force. What it does not get is the part of LAI's loop that is[/dim]")
+    out.write("[dim]about desktops rather than tools — standing aside while you use[/dim]")
+    out.write("[dim]the mouse, a screen of its own, refusing a click that never works.[/dim]")
+    return 0
+
+
+def _tool_count() -> int:
+    try:
+        from .tools import build_registry  # noqa: PLC0415
+
+        return len(build_registry())
+    except Exception:
+        return 50
+
+
 def cmd_launcher(args) -> int:
     """Put LAI in the applications menu, or take it out again."""
     from . import launcher  # noqa: PLC0415
@@ -1534,6 +1591,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_open.add_argument("--allow-remote", action="store_true", help=argparse.SUPPRESS)
     add_agent_flags(p_open)
     p_open.set_defaults(func=cmd_open)
+
+    p_connect = sub.add_parser(
+        "connect",
+        help=_help("connect"),
+        epilog="Any MCP client can borrow the desktop tools; `lai` keeps its own loop.",
+    )
+    p_connect.add_argument("client", nargs="?", help="opencode | claude (omit to list)")
+    p_connect.add_argument("--remove", action="store_true", help="Disconnect it again")
+    p_connect.set_defaults(func=cmd_connect)
 
     p_launcher = sub.add_parser(
         "launcher",

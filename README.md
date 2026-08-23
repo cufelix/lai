@@ -316,6 +316,7 @@ lai notes                       # what it has learned about this machine
 lai observe                     # print exactly what the agent sees right now
 lai tools                       # list the 53 tools
 lai launcher                    # put LAI in the applications menu
+lai connect opencode            # lend the desktop tools to another agent
 lai open                        # what the menu icon runs
 lai skills list|install|show    # manage skills
 lai sessions                    # past runs
@@ -736,17 +737,31 @@ LAI  ⚠️ Approval needed
 
 ---
 
-## Give Claude Code the desktop
+## Lend the desktop to another agent
 
-This is the shortest path from "Claude in the browser" to "Claude on the OS":
+LAI is an MCP **server** as well as an agent, so anything that speaks MCP can
+pick up its hands:
 
 ```bash
-claude mcp add lai -- /path/to/lai/.venv/bin/lai mcp
+lai connect opencode      # or: lai connect claude
+lai connect               # what is wired up right now
 ```
 
-Claude Code now has all 53 desktop tools — `app_open`, `ui_snapshot`,
+That client then has all the desktop tools — `app_open`, `ui_snapshot`,
 `ui_click`, `window_focus`, `computer_screenshot`, and the rest — driving your
-real machine, with LAI's safety gate still in force.
+real machine, with LAI's safety gate still in force. It keeps its own loop, its
+own interface and its own model credentials; nobody has to choose.
+
+What does not travel over MCP is the half of LAI's loop that is about desktops
+rather than tools: standing aside while you are using the mouse, refusing a
+click it has already made five times, working on a screen of its own, reading
+the pixels out loud when the model turns out to have no vision, handing the
+work back when the run ends. Those are loop behaviour, not tools, and a
+borrowed pair of hands does not come with them.
+
+Measured on the same task and the same model — *open the calculator, compute
+45+78, report the display* — opencode driving LAI's tools took 18 tool calls;
+LAI's own loop took 7. Both got 123.
 
 Set `LAI_MODE=auto` for the MCP server, since an MCP client cannot answer
 interactive approval prompts.
