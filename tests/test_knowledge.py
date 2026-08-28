@@ -192,3 +192,31 @@ def test_to_dict_is_serialisable(journal):
 def test_a_note_renders_its_own_frontmatter():
     note = Note(name="x", title="X", body="- a", tags=("t",), updated=0.0)
     assert note.render().startswith("---\ntitle: X\ntags: t\nupdated: ")
+
+
+def test_a_note_that_turns_out_to_be_wrong_is_corrected_not_mentioned(tmp_path):
+    """A wrong lesson persists and compounds. This machine learned 'app_open
+    Text Editor starts a process but no window appears — use Cursor instead',
+    which is untrue, and it steered every run afterwards. Telling the agent to
+    mention it in a summary nobody reads does not undo that; telling it to
+    correct the note does."""
+    from lai.knowledge import Journal
+
+    journal = Journal.open(tmp_path)
+    journal.write("editor", "- the editor is Xed")
+    block = journal.context_block("open the editor")
+    lower = block.lower()
+    assert "correct" in lower
+    assert "learn" in lower or "note" in lower
+    assert "summary" not in lower, "nothing acts on a summary"
+
+
+def test_notes_carry_their_age(tmp_path):
+    """Advice learned once, months ago, from a single bad run should not read
+    like something established."""
+    from lai.knowledge import Journal
+
+    journal = Journal.open(tmp_path)
+    journal.write("editor", "- the editor is Xed")
+    block = journal.context_block("open the editor")
+    assert "today" in block.lower() or "ago" in block.lower()

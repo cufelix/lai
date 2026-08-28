@@ -105,6 +105,29 @@ def parse(text: str, *, name: str = "", path: Path | None = None) -> Note:
     )
 
 
+def _age(note) -> str:
+    """How old a lesson is, in words.
+
+    Advice learned once, months ago, from a single unlucky run should not read
+    like something established. This machine had a note saying the text editor
+    could not be opened at all — untrue, written after one bad run, and it
+    steered every run afterwards.
+    """
+    when = getattr(note, "updated", 0.0) or 0.0
+    if not when:
+        return "age unknown"
+    days = max(0, int((time.time() - when) // 86400))
+    if days == 0:
+        return "learned today"
+    if days == 1:
+        return "learned yesterday"
+    if days < 14:
+        return f"learned {days} days ago"
+    if days < 60:
+        return f"learned {days // 7} weeks ago"
+    return f"learned {days // 30} months ago — worth re-checking"
+
+
 @dataclass(slots=True)
 class Journal:
     """The notes directory, read and written.
@@ -171,13 +194,15 @@ class Journal:
             "## What you have learned on this machine",
             "",
             "Notes from your own earlier runs here. Trust them as a starting point,",
-            "but verify — the desktop may have changed since. If one turns out to be",
-            "wrong, say so in your summary so it can be corrected.",
+            "but verify — the desktop may have changed since, and a note written after",
+            "one bad run can be wrong. If the screen contradicts one, correct the note",
+            "yourself with `note_write` rather than working around it: a wrong note",
+            "left standing will steer every run after this one.",
             "",
         ]
         budget = MAX_CONTEXT_CHARS
         for note in notes:
-            chunk = f"### {note.title}\n{note.body.strip()}\n"
+            chunk = f"### {note.title} [{_age(note)}]\n{note.body.strip()}\n"
             if len(chunk) > budget:
                 break
             budget -= len(chunk)
