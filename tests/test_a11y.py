@@ -308,3 +308,40 @@ def test_applications_returns_non_empty_list_of_tuples():
         assert isinstance(name, str)
         assert pid is None or isinstance(pid, int)
         assert accessible is not None
+
+
+def test_a_role_filter_that_finds_nothing_says_what_the_roles_actually_are():
+    """"no element matching 'Calculator' with role 'text'" is a dead end when
+    there *is* a Calculator and its role is something else. The next thing the
+    model needs is which role to ask for."""
+    from lai.errors import ElementNotFound
+    from lai.osl.a11y import Snapshot
+
+    snapshot = Snapshot(
+        elements=[
+            Element(ref=1, role="frame", name="Calculator", bounds=Rect(0, 0, 10, 10)),
+            Element(ref=2, role="push button", name="Calculator", bounds=Rect(0, 0, 5, 5)),
+        ],
+        app="Calculator",
+    )
+    try:
+        snapshot.find_one("Calculator", role="text")
+    except ElementNotFound as exc:
+        message = f"{exc} {getattr(exc, 'detail', '')}"
+        assert "frame" in message and "push button" in message, message
+    else:
+        raise AssertionError("expected ElementNotFound")
+
+
+def test_a_name_that_matches_nothing_at_all_is_reported_plainly():
+    from lai.errors import ElementNotFound
+    from lai.osl.a11y import Snapshot
+
+    snapshot = Snapshot(
+        elements=[Element(ref=1, role="frame", name="Calculator", bounds=Rect(0, 0, 10, 10))],
+        app="Calculator",
+    )
+    try:
+        snapshot.find_one("Spreadsheet")
+    except ElementNotFound as exc:
+        assert "Spreadsheet" in str(exc)

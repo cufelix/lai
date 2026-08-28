@@ -164,6 +164,19 @@ class Snapshot:
     def find_one(self, query: str, *, role: str | None = None) -> Element:
         matches = self.find(query, role=role)
         if not matches:
+            if role:
+                # The name may well be there under a different role, and that
+                # is exactly the next thing worth knowing: "no element matching
+                # 'Calculator' with role 'text'" is a dead end when there is a
+                # Calculator sitting right there as a frame.
+                same_name = self.find(query)
+                if same_name:
+                    roles = sorted({element.role for element in same_name})
+                    raise ElementNotFound(
+                        f"no element matching {query!r} with role {role!r}",
+                        detail=f"{query!r} does exist, with role(s): {', '.join(roles)} — "
+                               f"ask for one of those, or drop the role filter",
+                    )
             raise ElementNotFound(
                 f"no element matching {query!r}"
                 + (f" with role {role!r}" if role else "")
