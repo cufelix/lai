@@ -369,3 +369,20 @@ def test_clipboard_primary_selection(app, registry):
     assert write.ok
     read = registry.call("clipboard_read", {"selection": "primary"}, app["ctx"])
     assert "primary value" in read.content
+
+
+def test_typing_with_no_target_says_which_tool_does_that():
+    """The model asked to type without naming an element three times in one
+    day. It meant "type into whatever has focus", which is a real thing to
+    want and has its own tool — so the error should point at it rather than
+    repeating the requirement it just failed to meet."""
+    from lai.tools.ui import _resolve_target
+
+    try:
+        _resolve_target(None, {})
+    except ValueError as exc:
+        message = str(exc)
+        assert "computer_type" in message, message
+        assert "focus" in message.lower(), message
+    else:
+        raise AssertionError("expected a ValueError")

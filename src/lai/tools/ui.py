@@ -28,7 +28,14 @@ _TARGET = {
 def _resolve_target(ctx: ToolContext, args: dict):
     ref, name = args.get("ref"), args.get("name")
     if ref is None and not name:
-        raise ValueError("provide either 'ref' (from ui_snapshot) or 'name'")
+        # Asked for neither, the model almost always meant "whatever has focus"
+        # — which is a real thing to want and has its own tool. Repeating the
+        # requirement it just failed to meet sends it round the same loop.
+        raise ValueError(
+            "provide either 'name' (preferred — it survives the screen changing) or "
+            "'ref' from the most recent ui_snapshot. To type into whatever currently "
+            "has keyboard focus, without naming an element, use computer_type."
+        )
     return ref if ref is not None else name
 
 
