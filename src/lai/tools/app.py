@@ -9,8 +9,12 @@ from .base import ToolContext, ToolRegistry, ToolResult
 def register(registry: ToolRegistry) -> None:
     @registry.tool(
         "app_list",
-        "List installed applications, optionally filtered. Use this to find out what is "
-        "available before trying to open something.",
+        "Search the installed applications. Always pass a query — listing without one "
+        "returns an arbitrary slice of whatever is installed, and picking from it is "
+        "how a request for a text editor ends up opening an IDE. Most of the time you "
+        "do not need this at all: app_open matches a category directly, so "
+        "app_open('text editor'), app_open('browser') and app_open('calculator') "
+        "resolve to whatever this machine uses for that.",
         {
             "properties": {
                 "query": {"type": "string", "description": "Fuzzy filter on name/description"},
@@ -34,9 +38,12 @@ def register(registry: ToolRegistry) -> None:
 
     @registry.tool(
         "app_open",
-        "Launch an application by name and wait until its window actually appears, then "
-        "focus it. This is the way to start working with a program — do not shell out to "
-        "run GUI binaries. After it returns, call ui_snapshot to see what is on screen.",
+        "Launch an application and wait until its window actually appears, then focus "
+        "it. Accepts a category as readily as a name — 'text editor', 'browser', "
+        "'calculator', 'file manager' resolve to whatever this machine uses for that, "
+        "which is almost always what you want and saves listing everything installed. "
+        "This is the way to start a program — do not shell out to run GUI binaries. "
+        "After it returns, call ui_snapshot to see what is on screen.",
         {
             "properties": {
                 "name": {"type": "string", "description": "Application name, e.g. 'Text Editor', 'GIMP', 'Files'"},

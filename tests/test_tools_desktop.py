@@ -386,3 +386,29 @@ def test_typing_with_no_target_says_which_tool_does_that():
         assert "focus" in message.lower(), message
     else:
         raise AssertionError("expected a ValueError")
+
+
+def test_listing_applications_steers_towards_a_query():
+    """A run asked for a text editor, called app_list with limit 3 and no
+    query, got three arbitrary applications and opened an IDE. app_open
+    matches categories directly — 'text editor' resolves to the text editor."""
+    from lai.tools import build_registry
+
+    described = build_registry().get("app_list").description.lower()
+    assert "query" in described
+    assert "arbitrary" in described or "app_open" in described
+
+
+def test_opening_says_a_category_works():
+    from lai.tools import build_registry
+
+    described = build_registry().get("app_open").description.lower()
+    assert "text editor" in described or "category" in described
+
+
+def test_a_category_resolves_to_the_obvious_application():
+    from lai.osl.apps import AppLauncher
+
+    found = AppLauncher().find("text editor", limit=5)
+    assert found, "this machine has a text editor"
+    assert "editor" in found[0].name.lower() or "editor" in (found[0].comment or "").lower()
