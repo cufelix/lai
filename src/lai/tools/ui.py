@@ -11,10 +11,15 @@ from ..safety.policy import Risk
 from .base import ToolContext, ToolRegistry, ToolResult
 
 _TARGET = {
-    "ref": {"type": "integer", "description": "Element ref from the most recent ui_snapshot"},
+    "ref": {
+        "type": "integer",
+        "description": "Element ref from the most recent ui_snapshot. Goes stale as soon as "
+                       "a window opens, closes or takes focus — prefer 'name' where there is one",
+    },
     "name": {
         "type": "string",
-        "description": "Accessible name to match instead of a ref (substring, case-insensitive)",
+        "description": "Accessible name to match (substring, case-insensitive). Preferred over "
+                       "'ref': a name still resolves after the screen changes",
     },
     "role": {"type": "string", "description": "Narrow a name match by role, e.g. 'push button', 'entry', 'menu item'"},
 }
@@ -127,8 +132,10 @@ def register(registry: ToolRegistry) -> None:
 
     @registry.tool(
         "ui_click",
-        "Click a UI element by ref or by name. Uses the element's own accessible action "
-        "when available (deterministic), otherwise clicks its centre point.",
+        "Click a UI element. Prefer `name` — it survives a window moving or a dialog "
+        "opening, while a `ref` belongs to the snapshot it came from and goes stale "
+        "the moment anything changes. Uses the element's own accessible action when "
+        "available (deterministic), otherwise clicks its centre point.",
         {
             "properties": {
                 **_TARGET,

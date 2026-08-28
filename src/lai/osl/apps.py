@@ -137,6 +137,56 @@ BROWSER_ISOLATION: dict[str, tuple[str, ...]] = {
 }
 
 
+CHROMIUM_MARKERS = (
+    "chrome_crashpad_handler",
+    "chrome-sandbox",
+    "chrome_100_percent.pak",
+    "resources/app.asar",
+)
+"""Files that only sit beside a Chromium or Electron executable."""
+
+ACCESSIBILITY_FLAG = "--force-renderer-accessibility"
+
+
+def is_chromium_app(binary) -> bool:
+    """Whether this program is Chromium underneath — Electron included.
+
+    Detected from what is on disk beside it rather than a list of names,
+    because the list would be wrong the week after it was written. The launcher
+    is usually a shell script in `bin/`, so the markers live one directory up.
+    """
+    try:
+        resolved = Path(binary).resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not resolved.exists():
+        return False
+    for directory in (resolved.parent, resolved.parent.parent):
+        for marker in CHROMIUM_MARKERS:
+            try:
+                if (directory / marker).exists():
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def accessible_command(command: list[str]) -> list[str]:
+    """The same command, with an Electron app's accessibility tree switched on.
+
+    Without the flag a Chromium window is a single opaque rectangle to AT-SPI:
+    not the text, not the buttons, nothing. The agent is reduced to reading
+    pixels and clicking coordinates, and it spent a whole run doing exactly
+    that inside an editor whose entire contents it could have read.
+    """
+    if not command or not is_chromium_app(command[0]):
+        return command
+    if ACCESSIBILITY_FLAG in command:
+        return command
+    # Before the positionals: Chromium ignores switches that follow one.
+    return [command[0], ACCESSIBILITY_FLAG, *command[1:]]
+
+
 def isolate_browser(
     command: list[str], profile_root: Path, *, already_running: bool = False
 ) -> list[str]:
@@ -277,6 +327,7 @@ class AppLauncher:
                 command, self.browser_profile,
                 already_running=self._has_window_for(command[0]),
             )
+        command = accessible_command(command)
 
         before = {w.id for w in self._safe_window_ids()}
         env = {**os.environ, "GDK_BACKEND": os.environ.get("GDK_BACKEND", "x11")}

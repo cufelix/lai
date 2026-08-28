@@ -329,3 +329,24 @@ def test_a_blind_model_is_told_up_front_and_pointed_at_ocr():
     prompt = build_system_prompt(vision=False)
     assert "You cannot see" in prompt
     assert "ocr_read" in prompt and "ui_snapshot" in prompt
+
+
+# -- names outlive numbers ------------------------------------------------
+
+
+def test_the_protocol_prefers_a_name_to_a_number():
+    """Seven `element_not_found: no element with ref=N` in this machine's logs.
+    A name survives a window moving; a ref belongs to one snapshot."""
+    from lai.agent.prompt import OPERATING_LOOP
+
+    text = OPERATING_LOOP.lower()
+    assert "name" in text and "ref" in text
+    assert "stale" in text or "survives" in text
+
+
+def test_the_click_tool_says_which_to_reach_for_first():
+    from lai.tools import build_registry
+
+    described = build_registry().get("ui_click").description.lower()
+    assert "prefer" in described or "name" in described
+    assert "stale" in described or "survives" in described or "snapshot" in described

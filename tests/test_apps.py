@@ -457,3 +457,73 @@ def test_firefox_needs_no_such_flag(tmp_path):
     from lai.osl.apps import isolate_browser
 
     assert "--force-renderer-accessibility" not in isolate_browser(["/usr/bin/firefox"], tmp_path)
+
+
+# -- Electron apps are opaque until asked not to be -----------------------
+
+
+def make_electron(tmp_path, name="cursor"):
+    """The layout every Electron app on Linux actually has."""
+    root = tmp_path / "share" / name
+    (root / "bin").mkdir(parents=True)
+    binary = root / "bin" / name
+    binary.write_text("#!/bin/sh\nexec real\n")
+    binary.chmod(0o755)
+    (root / "chrome_crashpad_handler").write_text("")
+    return binary
+
+
+def test_an_electron_app_is_recognised(tmp_path):
+    from lai.osl.apps import is_chromium_app
+
+    assert is_chromium_app(make_electron(tmp_path)) is True
+
+
+def test_an_ordinary_program_is_not(tmp_path):
+    from lai.osl.apps import is_chromium_app
+
+    plain = tmp_path / "bin" / "xed"
+    plain.parent.mkdir(parents=True)
+    plain.write_text("#!/bin/sh\n")
+    assert is_chromium_app(plain) is False
+
+
+def test_a_missing_binary_is_not(tmp_path):
+    from lai.osl.apps import is_chromium_app
+
+    assert is_chromium_app(tmp_path / "nothing" / "here") is False
+
+
+def test_launching_one_turns_its_accessibility_tree_on(tmp_path):
+    """Without the flag, Cursor, VS Code, Slack and Discord are one opaque
+    rectangle to AT-SPI, and the agent is reduced to clicking pixels. It spent
+    a whole run doing exactly that."""
+    from lai.osl.apps import accessible_command
+
+    binary = make_electron(tmp_path)
+    command = accessible_command([str(binary), "/tmp/notes.txt"])
+    assert "--force-renderer-accessibility" in command
+    assert command[0] == str(binary)
+    assert command[-1] == "/tmp/notes.txt", "flags belong before the positional"
+
+
+def test_an_ordinary_program_is_launched_untouched(tmp_path):
+    from lai.osl.apps import accessible_command
+
+    plain = tmp_path / "xed"
+    plain.write_text("#!/bin/sh\n")
+    assert accessible_command([str(plain), "a.txt"]) == [str(plain), "a.txt"]
+
+
+def test_the_flag_is_not_added_twice(tmp_path):
+    from lai.osl.apps import accessible_command
+
+    binary = make_electron(tmp_path)
+    once = accessible_command([str(binary), "--force-renderer-accessibility"])
+    assert once.count("--force-renderer-accessibility") == 1
+
+
+def test_an_empty_command_is_left_alone():
+    from lai.osl.apps import accessible_command
+
+    assert accessible_command([]) == []

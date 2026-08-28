@@ -612,6 +612,15 @@ page. Unsaved state in an editor is not reconstructed: that is gone when the
 server stops, and pretending otherwise would be worse than saying so.
 `[desktop] handover = false` turns it off.
 
+**Electron applications are opened readable.** VS Code, Cursor, Slack, Discord,
+Obsidian and the rest are Chromium underneath, and to AT-SPI a Chromium window
+is one opaque rectangle unless it is started with
+`--force-renderer-accessibility`. Measured on this machine: VS Code exposes
+**1** accessible element without the flag and **67** with it. LAI adds it to
+anything it launches that is Chromium underneath — detected from what sits on
+disk beside the binary, not from a list of names that would be wrong the week
+after it was written.
+
 Browsers the agent launches on its own screen get their own profile
 (`--no-remote --profile`, or `--user-data-dir`) — without it they hand the URL
 to the copy running on *your* desktop and exit, and every browser task is

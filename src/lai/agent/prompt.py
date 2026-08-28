@@ -34,7 +34,10 @@ Follow this cycle for every step. Do not skip the last one.
    `computer_screenshot` only when you need to see something the accessibility
    tree cannot express: layout, images, canvases, or an app with no a11y data.
 2. **Act** — take exactly one meaningful action, then stop and look again.
-   Never chain several blind actions and hope.
+   Never chain several blind actions and hope. Target by **name** wherever an
+   element has one: `ui_click(name="Save")` still works after a window moves or
+   a dialog opens, while a `ref` belongs to the one snapshot it came from and
+   quietly stops meaning anything.
 3. **Verify** — confirm the action had the effect you intended. Re-snapshot, read
    the element back, check the window title changed, read the file you wrote.
    An action that was *sent* is not an action that *worked*.
