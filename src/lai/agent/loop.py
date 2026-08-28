@@ -153,7 +153,16 @@ class Agent:
         """Long-lived services (memory, scheduler, this agent) handed to tools."""
         self.staleness = Staleness()
         """Whether the numbered references the model holds still mean anything."""
-        self.gate = ToolGate(registry)
+        # The gate consults the policy: a tool that can only ever be refused is
+        # not offered, and an approver is what decides whether "ask" is a
+        # question or a dead end.
+        self.gate = ToolGate(
+            registry,
+            policy=policy,
+            # An approver that cannot reach a human is not an approver. `lai do`
+            # in a pipeline has one, and it refuses everything.
+            can_ask=bool(approver is not None and getattr(approver, "can_ask", True)),
+        )
         """Decides which tool schemas this task is worth paying for."""
         self._system_prompt: str = ""
         self._tool_schemas: list[dict] = []
@@ -377,7 +386,10 @@ class Agent:
         # Withheld tools are named, never hidden: a model that cannot see a
         # tool and does not know it exists will invent a way around it.
         withheld = self.gate.describe_withheld(task or self.session.task or "")
-        extra = "\n\n".join(part for part in (self.system_extra, withheld) if part)
+        forbidden = self.gate.describe_forbidden()
+        extra = "\n\n".join(
+            part for part in (self.system_extra, forbidden, withheld) if part
+        )
         return build_system_prompt(
             desktop=self.desktop,
             safety=getattr(self.config, "safety", None),

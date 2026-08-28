@@ -110,18 +110,61 @@ class ToolGate:
     make a multi-step job with a database re-discover the same tool each turn.
     """
 
-    def __init__(self, registry, *, limit: int = DEFAULT_LIMIT) -> None:
+    def __init__(
+        self,
+        registry,
+        *,
+        limit: int = DEFAULT_LIMIT,
+        policy=None,
+        can_ask: bool = True,
+    ) -> None:
         self.registry = registry
         self.limit = limit
+        self.policy = policy
+        """Consulted so tools that can never be permitted are not offered."""
+        self.can_ask = can_ask
+        """Whether there is anybody to answer an approval prompt."""
         self.unlocked: set[str] = set()
+        self._impossible: list = []
 
     # -- selection -------------------------------------------------------
 
     def _partition(self) -> tuple[list, list]:
-        specs = self.registry.specs()
+        specs = [spec for spec in self.registry.specs() if self._possible(spec)]
         core = [spec for spec in specs if not is_extension(spec)]
         extensions = [spec for spec in specs if is_extension(spec)]
         return core, extensions
+
+    def _possible(self, spec) -> bool:
+        """Whether this tool could succeed under the permissions in force.
+
+        Eleven per cent of the tool calls in this machine's logs were refused
+        before they ran — clicks in readonly, clicks in ask mode with nobody to
+        ask, shell commands in auto. The model cannot see a permission mode, so
+        every one of those cost a full turn to discover something that was
+        knowable before the turn started. A tool that can only ever be refused
+        is not offered.
+        """
+        if self.policy is None:
+            return True
+        try:
+            verdict = self.policy.check(spec.name, {}, risk=spec.risk)
+        except Exception:
+            return True  # a policy that cannot decide must not empty the toolbox
+
+        from ..safety.policy import Decision  # noqa: PLC0415
+
+        if verdict.decision is Decision.DENY:
+            self._remember_impossible(spec, verdict.reason)
+            return False
+        if verdict.decision is Decision.ASK and not self.can_ask:
+            self._remember_impossible(spec, f"{verdict.reason}, and there is nobody to ask")
+            return False
+        return True
+
+    def _remember_impossible(self, spec, reason: str) -> None:
+        if not any(kept.name == spec.name for kept, _ in self._impossible):
+            self._impossible.append((spec, reason))
 
     def choose(self, task: str) -> tuple[list, list]:
         """(shown, withheld) for this task."""
@@ -149,6 +192,31 @@ class ToolGate:
         took = [name for name in names if name in self.registry]
         self.unlocked.update(took)
         return took
+
+    def describe_forbidden(self) -> str:
+        """One paragraph naming what the permissions in force rule out.
+
+        Withholding silently would be the worst of both worlds: the model
+        cannot act and does not know why, so it invents a way around — which is
+        how a run ends up shelling out to do something it has a tool for.
+        """
+        _, _ = self._partition(), None  # populate, in case nothing has asked yet
+        if not self._impossible:
+            return ""
+        reasons: dict[str, list[str]] = {}
+        for spec, reason in self._impossible:
+            reasons.setdefault(reason, []).append(spec.name)
+        lines = ["# What you cannot do right now"]
+        for reason, names in reasons.items():
+            listed = ", ".join(sorted(names)[:12])
+            lines.append(f"- {reason}. Withheld: {listed}.")
+        lines.append("")
+        lines.append(
+            "These tools are not in your list and calling them will fail. Do not try "
+            "to achieve the same thing another way — say plainly what you would need "
+            "permission for, and stop."
+        )
+        return "\n".join(lines)
 
     def describe_withheld(self, task: str) -> str:
         """One line for the system prompt naming what is connected but not shown.

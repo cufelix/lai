@@ -210,6 +210,10 @@ def _interactive_approver(out: Out):
             return True
         return approve(name, tool_input, verdict)
 
+    # Whether asking is a question or a dead end. A run with no terminal
+    # refuses every gated action, and the agent spends a turn discovering that
+    # for each one — so the tools are simply not offered instead.
+    wrapper.can_ask = sys.stdin.isatty()  # type: ignore[attr-defined]
     return wrapper
 
 
