@@ -33,6 +33,7 @@ from .providers.base import (
 )
 from .repetition import Repetition
 from .session import Session
+from .staleness import Staleness
 from .toolgate import ToolGate
 
 EventCallback = Callable[[str, dict], None]
@@ -150,6 +151,8 @@ class Agent:
         self.stop_requested = threading.Event()
         self.tool_extra: dict = {}
         """Long-lived services (memory, scheduler, this agent) handed to tools."""
+        self.staleness = Staleness()
+        """Whether the numbered references the model holds still mean anything."""
         self.gate = ToolGate(registry)
         """Decides which tool schemas this task is worth paying for."""
         self._system_prompt: str = ""
@@ -535,12 +538,17 @@ class Agent:
                                            "duration": 0.0})
                 continue
 
+            stale = self.staleness.warning(call.name, call.input)
+
             self._yield_to_human(call.name)
             result: ToolResult = self.registry.call(call.name, call.input, context)
+            self.staleness.record(call.name, ok=result.ok)
             warning = self.repetition.record(
                 call.name, call.input, ok=result.ok, content=result.content,
                 acting=self._is_acting(call.name),
             )
+            if stale:
+                warning = f"{warning}\n\n[{stale}]" if warning else f"\n\n[{stale}]"
             if warning:
                 result = replace(result, content=result.content + warning)
             self._emit(
