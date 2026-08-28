@@ -30,8 +30,14 @@ class Clipboard:
 
     @property
     def available(self) -> bool:
+        """Whether the clipboard can actually be used, not merely imported.
+
+        Saying yes while every operation fails is worse than saying no: it is
+        what let `lai doctor` report a working clipboard on a machine where the
+        agent could not read one.
+        """
         try:
-            self._api()
+            self._clipboard("clipboard")
             return True
         except BackendUnavailable:
             return False
@@ -39,7 +45,16 @@ class Clipboard:
     def _clipboard(self, selection: str):
         gtk, gdk = self._api()
         atom = gdk.SELECTION_PRIMARY if selection == "primary" else gdk.SELECTION_CLIPBOARD
-        return gtk, gtk.Clipboard.get(atom)
+        board = gtk.Clipboard.get(atom)
+        if board is None:
+            # GTK imports fine without a display and hands back None here. The
+            # next line then asked None for `set_text`, and the tool died with
+            # an AttributeError that told the model nothing it could act on.
+            raise BackendUnavailable(
+                f"the {selection} clipboard could not be obtained",
+                detail="GTK is installed but could not reach a display — check DISPLAY",
+            )
+        return gtk, board
 
     def _pump(self, gtk) -> None:
         """Drain pending GTK events so the selection transfer completes."""

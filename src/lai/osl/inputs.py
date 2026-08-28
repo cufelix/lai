@@ -8,6 +8,7 @@ X server can never hang the agent loop.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -111,6 +112,21 @@ class InputResult:
         return {"action": self.action, **self.detail}
 
 
+def _no_display_detail() -> str:
+    """Why xdotool could not reach a screen, in terms somebody can act on."""
+    display = os.environ.get("DISPLAY")
+    if not display:
+        return (
+            "DISPLAY is not set, so there is no session to send input to. This usually "
+            "means LAI was started by something that strips the environment — a service, "
+            "cron, or an MCP client."
+        )
+    return (
+        f"the X server on DISPLAY={display!r} is not answering. If this was the agent's "
+        f"own screen, it has been shut down."
+    )
+
+
 class InputController:
     """Thin, well-validated wrapper around xdotool."""
 
@@ -141,9 +157,13 @@ class InputController:
                 f"xdotool timed out after {self.timeout}s", detail=" ".join(args)
             ) from exc
         if proc.returncode != 0:
-            raise BackendUnavailable(
-                f"xdotool {args[0]} failed", detail=(proc.stderr or proc.stdout).strip()
-            )
+            complaint = (proc.stderr or proc.stdout).strip()
+            if "can't open display" in complaint.lower():
+                # xdotool's own words are "Can't open display: (null)", which
+                # tells the reader that something is null. The useful fact is
+                # which display it tried and whether one was named at all.
+                raise BackendUnavailable(f"xdotool {args[0]} failed", detail=_no_display_detail())
+            raise BackendUnavailable(f"xdotool {args[0]} failed", detail=complaint)
         return proc.stdout.strip()
 
     # -- pointer ---------------------------------------------------------

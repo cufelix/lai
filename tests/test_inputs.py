@@ -212,3 +212,66 @@ def test_move_can_skip_verification(monkeypatch):
     monkeypatch.setattr(controller, "_run", lambda *args: calls.append(args[0]) or "")
     controller.move(Point(1, 2), verify=False)
     assert calls == ["mousemove"], "verification should cost nothing when disabled"
+
+
+# -- a display that xdotool cannot open -----------------------------------
+
+
+def test_a_missing_display_is_named_rather_than_quoted_back(monkeypatch):
+    """xdotool says "Can't open display: (null)", which tells the model that
+    something is null. Five of those in this machine's logs, and none of them
+    said the one thing that would have helped: DISPLAY is not set."""
+    import subprocess
+
+    from lai.errors import BackendUnavailable
+    from lai.osl.inputs import InputController
+
+    def dead(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="Error: Can't open display: (null)\nFailed creating new xdo instance"
+        )
+
+    controller = InputController()
+    monkeypatch.setattr(controller, "_xdotool", "/usr/bin/xdotool")
+    monkeypatch.setattr(subprocess, "run", dead)
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    with pytest.raises(BackendUnavailable, match="DISPLAY is not set"):
+        controller._run("key", "a")
+
+
+def test_a_display_that_stopped_answering_says_which_one(monkeypatch):
+    import subprocess
+
+    from lai.errors import BackendUnavailable
+    from lai.osl.inputs import InputController
+
+    def dead(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="Error: Can't open display: :91")
+
+    controller = InputController()
+    monkeypatch.setattr(controller, "_xdotool", "/usr/bin/xdotool")
+    monkeypatch.setattr(subprocess, "run", dead)
+    monkeypatch.setenv("DISPLAY", ":91")
+
+    with pytest.raises(BackendUnavailable) as raised:
+        controller._run("key", "a")
+    assert ":91" in str(raised.value) + str(raised.value.detail)
+
+
+def test_an_ordinary_xdotool_failure_is_still_reported_as_itself(monkeypatch):
+    import subprocess
+
+    from lai.errors import BackendUnavailable
+    from lai.osl.inputs import InputController
+
+    def refused(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="unknown key name: qq")
+
+    controller = InputController()
+    monkeypatch.setattr(controller, "_xdotool", "/usr/bin/xdotool")
+    monkeypatch.setattr(subprocess, "run", refused)
+    monkeypatch.setenv("DISPLAY", ":0")
+
+    with pytest.raises(BackendUnavailable, match="unknown key name"):
+        controller._run("key", "qq")

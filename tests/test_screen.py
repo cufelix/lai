@@ -173,3 +173,61 @@ def test_annotate_returns_same_size_screenshot_with_different_bytes(screen_captu
     assert annotated.png != shot.png
     assert annotated.region == shot.region
     assert annotated.scale == shot.scale
+
+
+# -- a display that is not there any more ---------------------------------
+
+
+def test_a_capture_with_no_display_says_so_rather_than_asserting(monkeypatch):
+    """`mss` carries `assert self._monitors is not None`, which fires when it
+    cannot reach a display. The model was handed `raised AssertionError:` — an
+    empty message it could do nothing with. Twice, in this machine's logs."""
+    import os
+
+    from lai.errors import DisplayError
+    from lai.osl.geometry import Rect
+    from lai.osl.screen import ScreenCapture
+
+    class Dead:
+        def grab(self, region):
+            raise AssertionError
+
+    capture = ScreenCapture()
+    monkeypatch.setattr(capture, "_backend", lambda: Dead())
+    monkeypatch.setenv("DISPLAY", ":77")
+
+    with pytest.raises(DisplayError) as raised:
+        capture.grab(Rect(0, 0, 10, 10))
+    assert ":77" in str(raised.value)
+    assert os.environ["DISPLAY"] == ":77"
+
+
+def test_the_message_names_the_display_even_when_unset(monkeypatch):
+    from lai.errors import DisplayError
+    from lai.osl.geometry import Rect
+    from lai.osl.screen import ScreenCapture
+
+    class Dead:
+        def grab(self, region):
+            raise AssertionError
+
+    capture = ScreenCapture()
+    monkeypatch.setattr(capture, "_backend", lambda: Dead())
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    with pytest.raises(DisplayError, match="DISPLAY is not set"):
+        capture.grab(Rect(0, 0, 10, 10))
+
+
+def test_an_ordinary_capture_failure_is_still_reported_as_itself(monkeypatch):
+    from lai.osl.geometry import Rect
+    from lai.osl.screen import ScreenCapture
+
+    class Awkward:
+        def grab(self, region):
+            raise ValueError("something else entirely")
+
+    capture = ScreenCapture()
+    monkeypatch.setattr(capture, "_backend", lambda: Awkward())
+    with pytest.raises(ValueError, match="something else entirely"):
+        capture.grab(Rect(0, 0, 10, 10))

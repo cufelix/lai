@@ -62,6 +62,23 @@ class Screenshot:
         }
 
 
+def _no_display_message() -> str:
+    """Why a capture failed, in terms somebody can act on."""
+    import os  # noqa: PLC0415
+
+    display = os.environ.get("DISPLAY")
+    if not display:
+        return (
+            "cannot capture the screen: DISPLAY is not set, so there is no session to "
+            "capture. This usually means LAI was started by something that strips the "
+            "environment — a service, cron, or an MCP client."
+        )
+    return (
+        f"cannot capture the screen on DISPLAY={display!r} — the X server is not "
+        f"answering. If this was the agent's own screen, it has been shut down."
+    )
+
+
 class ScreenCapture:
     """mss-backed capture with lazy, per-thread connections."""
 
@@ -119,9 +136,16 @@ class ScreenCapture:
             raise DisplayError(f"invalid capture region {bounds.as_tuple()}")
 
         backend = self._backend()
-        raw = backend.grab(
-            {"left": bounds.x, "top": bounds.y, "width": bounds.width, "height": bounds.height}
-        )
+        try:
+            raw = backend.grab(
+                {"left": bounds.x, "top": bounds.y, "width": bounds.width, "height": bounds.height}
+            )
+        except AssertionError as exc:
+            # mss carries `assert self._monitors is not None`, which is what
+            # fires when it cannot reach a display. Passed through, the model is
+            # handed "raised AssertionError:" — an empty string it can do
+            # nothing with, when the actual problem has a name and a fix.
+            raise DisplayError(_no_display_message()) from exc
         from PIL import Image  # noqa: PLC0415 - optional heavy import
 
         image = Image.frombytes("RGB", raw.size, raw.rgb)
