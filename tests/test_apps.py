@@ -527,3 +527,48 @@ def test_an_empty_command_is_left_alone():
     from lai.osl.apps import accessible_command
 
     assert accessible_command([]) == []
+
+
+# -- single-instance apps, which are not only browsers --------------------
+
+
+def test_a_single_instance_editor_is_launched_standalone(tmp_path):
+    """Xed is single-instance like a browser: a second one on the agent's
+    screen hands the file to the copy running on yours and exits, so no window
+    ever appears where the agent is looking. It spent three runs concluding
+    the editor was broken."""
+    from lai.osl.apps import standalone_command
+
+    command = standalone_command(["/usr/bin/xed", "/tmp/notes.txt"])
+    assert "--standalone" in command
+    assert command[0] == "/usr/bin/xed"
+    assert command[-1] == "/tmp/notes.txt", "flags belong before the positional"
+
+
+def test_the_flag_matches_the_program(tmp_path):
+    from lai.osl.apps import standalone_command
+
+    assert "--new-instance" in standalone_command(["/usr/bin/nautilus"])
+    assert "--standalone" in standalone_command(["/usr/bin/pluma"])
+
+
+def test_a_program_that_is_not_single_instance_is_untouched(tmp_path):
+    from lai.osl.apps import standalone_command
+
+    assert standalone_command(["/usr/bin/gnome-calculator"]) == ["/usr/bin/gnome-calculator"]
+    assert standalone_command([]) == []
+
+
+def test_an_explicit_choice_wins(tmp_path):
+    from lai.osl.apps import standalone_command
+
+    given = ["/usr/bin/xed", "--standalone", "a.txt"]
+    assert standalone_command(given) == given
+
+
+def test_it_only_applies_on_the_agents_own_screen(tmp_path):
+    """On your desktop, handing the file to the editor you already have open
+    is exactly right."""
+    from lai.osl.apps import AppLauncher
+
+    assert AppLauncher(window_manager=object()).browser_profile is None

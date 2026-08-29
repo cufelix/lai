@@ -187,6 +187,40 @@ def accessible_command(command: list[str]) -> list[str]:
     return [command[0], ACCESSIBILITY_FLAG, *command[1:]]
 
 
+SINGLE_INSTANCE: dict[str, str] = {
+    # Editors that hand a file to the copy already running and exit.
+    "xed": "--standalone",
+    "pluma": "--standalone",
+    "gedit": "--standalone",
+    "mousepad": "--disable-server",
+    # File managers do the same.
+    "nautilus": "--new-instance",
+    "nemo": "--no-desktop",
+    "caja": "--force-desktop",
+}
+"""Programs that are one instance per session, and the flag that says otherwise.
+
+Browsers are the famous case, but they are not the only one. A second `xed` on
+the agent's screen hands its file to the one on the human's desktop and exits —
+so the file opens where nobody is looking, no window appears where the agent
+is, and three runs in a row concluded the editor was broken.
+"""
+
+
+def standalone_command(command: list[str]) -> list[str]:
+    """The same command, forced to start its own instance.
+
+    Only for the agent's own screen. On the human's desktop, handing a file to
+    the editor they already have open is exactly the right behaviour.
+    """
+    if not command:
+        return command
+    flag = SINGLE_INSTANCE.get(Path(command[0]).name.lower())
+    if flag is None or flag in command:
+        return command
+    return [command[0], flag, *command[1:]]
+
+
 def isolate_browser(
     command: list[str], profile_root: Path, *, already_running: bool = False
 ) -> list[str]:
@@ -328,6 +362,11 @@ class AppLauncher:
                 already_running=self._has_window_for(command[0]),
             )
         command = accessible_command(command)
+        if self.browser_profile is not None:
+            # The same screen that needs its own browser profile needs its own
+            # editor: both are single-instance, both hand off to the copy on
+            # the human's desktop otherwise.
+            command = standalone_command(command)
 
         before = {w.id for w in self._safe_window_ids()}
         env = {**os.environ, "GDK_BACKEND": os.environ.get("GDK_BACKEND", "x11")}
