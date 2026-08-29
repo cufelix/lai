@@ -220,3 +220,44 @@ def test_notes_carry_their_age(tmp_path):
     journal.write("editor", "- the editor is Xed")
     block = journal.context_block("open the editor")
     assert "today" in block.lower() or "ago" in block.lower()
+
+
+def test_a_newer_observation_is_presented_first(tmp_path):
+    """Two bullets can be worded quite differently and mean opposite things.
+    This machine's own note ended up saying both 'no window ever appears' and
+    'opens, renders and saves normally'. Semantics are too fragile to judge, so
+    the newest observation goes first — the desktop changes, and the most
+    recent look at it is the one to believe."""
+    from lai.knowledge import Journal
+
+    journal = Journal.open(tmp_path)
+    journal.append("editor", "no window ever appears for xed")
+    journal.append("editor", "xed opens and saves normally")
+
+    body = journal.get("editor").body
+    lines = [line for line in body.splitlines() if line.startswith("-")]
+    assert "opens and saves normally" in lines[0]
+
+
+def test_a_note_does_not_grow_without_bound(tmp_path):
+    """A note nobody can read is a note nobody corrects."""
+    from lai.knowledge import MAX_LESSONS, Journal
+
+    journal = Journal.open(tmp_path)
+    for i in range(MAX_LESSONS + 5):
+        journal.append("editor", f"lesson number {i} about this editor")
+
+    lines = [line for line in journal.get("editor").body.splitlines() if line.startswith("-")]
+    assert len(lines) == MAX_LESSONS
+    assert f"lesson number {MAX_LESSONS + 4}" in lines[0], "the newest survives"
+    assert "lesson number 0 " not in journal.get("editor").body, "the oldest is dropped"
+
+
+def test_the_same_lesson_twice_is_still_filed_once(tmp_path):
+    from lai.knowledge import Journal
+
+    journal = Journal.open(tmp_path)
+    journal.append("editor", "the text editor on this machine is xed")
+    journal.append("editor", "the text editor on this machine is xed")
+    lines = [line for line in journal.get("editor").body.splitlines() if line.startswith("-")]
+    assert len(lines) == 1

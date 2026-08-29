@@ -25,6 +25,12 @@ from pathlib import Path
 
 NOTES_DIRNAME = "notes"
 MAX_NOTE_CHARS = 8_000
+
+MAX_LESSONS = 12
+"""Bullets kept in one note, newest first.
+
+A note that has grown to forty lines is one nobody reads, which means nobody
+notices the line in it that stopped being true."""
 """A note is a summary, not a transcript; beyond this it stops being readable."""
 
 MAX_CONTEXT_CHARS = 6_000
@@ -243,7 +249,19 @@ class Journal:
         lines = existing.body.splitlines() if existing else []
         if any(_similar(lesson, line) for line in lines):
             return existing  # type: ignore[return-value]
-        lines.append(f"- {lesson}")
+
+        # Newest first. Two bullets can be worded quite differently and mean
+        # opposite things — this journal ended up holding both "no window ever
+        # appears" and "opens and saves normally" about one editor. Judging
+        # which is true needs semantics that would be wrong more often than
+        # right; preferring the most recent look at a desktop that changes is
+        # a rule that can be stated and relied on.
+        lines.insert(0, f"- {lesson}")
+        # And bounded, because a note nobody can read is a note nobody corrects.
+        bullets = [line for line in lines if line.lstrip().startswith("-")]
+        if len(bullets) > MAX_LESSONS:
+            keep = set(bullets[:MAX_LESSONS])
+            lines = [line for line in lines if not line.lstrip().startswith("-") or line in keep]
         merged_tags = tuple(dict.fromkeys([*(existing.tags if existing else ()), *tags]))
         return self.write(
             name, "\n".join(lines),
