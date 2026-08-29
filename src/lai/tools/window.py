@@ -27,6 +27,10 @@ def register(registry: ToolRegistry) -> None:
     @registry.tool(
         "window_list",
         "List open windows: id, title, application class, pid, geometry and state. "
+        "Do not call this repeatedly to wait for a window — each look costs a whole "
+        "turn, and `ui_wait_for` waits for an element to appear while `desktop_wait` "
+        "waits for the screen to stop changing. `app_open` already waits for its own "
+        "window before it returns. "
         "This is your map of what is currently running on screen.",
         {
             "properties": {

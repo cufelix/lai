@@ -412,3 +412,14 @@ def test_a_category_resolves_to_the_obvious_application():
     found = AppLauncher().find("text editor", limit=5)
     assert found, "this machine has a text editor"
     assert "editor" in found[0].name.lower() or "editor" in (found[0].comment or "").lower()
+
+
+def test_listing_windows_points_at_the_way_to_wait():
+    """56 of 391 tool calls in one day were a window_list immediately after
+    another window_list — polling for a window to appear, one model turn per
+    look. There are tools that wait properly."""
+    from lai.tools import build_registry
+
+    described = build_registry().get("window_list").description.lower()
+    assert "ui_wait_for" in described or "desktop_wait" in described
+    assert "repeatedly" in described or "poll" in described
