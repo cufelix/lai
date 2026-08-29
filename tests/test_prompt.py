@@ -350,3 +350,29 @@ def test_the_click_tool_says_which_to_reach_for_first():
     described = build_registry().get("ui_click").description.lower()
     assert "prefer" in described or "name" in described
     assert "stale" in described or "survives" in described or "snapshot" in described
+
+
+# -- verifying the thing, not a proxy for it ------------------------------
+
+
+def test_the_protocol_says_a_proxy_is_not_the_result():
+    """Watched: the agent saved an empty file, cited the window title reading
+    'verify-lai.txt' as its verification, and reported success. The title
+    proves a file has that name. It says nothing about what is in it."""
+    import re
+
+    from lai.agent.prompt import COMPLETION_PROTOCOL
+
+    # Normalised: the assertion is about what it says, not how it wraps.
+    text = re.sub(r"\s+", " ", COMPLETION_PROTOCOL.lower())
+    assert "window title" in text
+    assert "file_read" in text or "read the file" in text
+
+
+def test_it_names_the_check_for_each_kind_of_outcome():
+    import re
+
+    from lai.agent.prompt import COMPLETION_PROTOCOL
+
+    text = re.sub(r"\s+", " ", COMPLETION_PROTOCOL.lower())
+    assert "file" in text and "screen" in text
