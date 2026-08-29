@@ -543,7 +543,13 @@ class Agent:
                 # Cheaper than the turn it would have cost, and more useful:
                 # the model is told why, and what would actually be different.
                 self._emit("repeating", {"name": call.name, "id": call.id})
-                self.audit.write("refused_repeat", tool=call.name)
+                # The reason, not just the fact. A guard that saves a model
+                # turn every time it fires is only defensible if somebody can
+                # count how often and for what — twenty-one of these appeared
+                # in one day's audit with no reason recorded at all.
+                self.audit.write(
+                    "refused_repeat", tool=call.name, reason=refusal.splitlines()[0][:160]
+                )
                 blocks.append(ToolResultBlock(call.id, refusal, is_error=True))
                 self._emit("tool_result", {"name": call.name, "ok": False,
                                            "summary": refusal.splitlines()[0], "images": 0,

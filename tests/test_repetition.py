@@ -220,3 +220,51 @@ def test_the_loop_knows_which_tools_act():
     assert agent._is_acting("computer_click") is True
     assert agent._is_acting("window_list") is False
     assert agent._is_acting("nonsense") is False
+
+
+def test_the_audit_records_why_a_call_was_refused():
+    """Twenty-one refusals appeared in one day's audit with reason None. The
+    guard saves a model turn each time, and a saved turn nobody can count is a
+    feature nobody can defend or tune."""
+    from lai.agent.loop import Agent
+    from lai.agent.providers.base import ToolCall
+    from lai.agent.repetition import REFUSE_AT, Repetition
+    from lai.agent.session import Session
+    from lai.agent.staleness import Staleness
+    from lai.agent.toolgate import ToolGate
+    from lai.config import load_config
+    from lai.tools.base import ToolRegistry, ToolResult
+
+    written = []
+
+    class Registry:
+        def call(self, name, arguments, context):
+            return ToolResult.failure("element_not_found")
+
+        def get(self, name):
+            return type("S", (), {"name": name, "risk": None})()
+
+    agent = Agent.__new__(Agent)
+    agent.config = load_config()
+    agent.registry = Registry()
+    agent.gate = ToolGate(ToolRegistry())
+    agent.staleness = Staleness()
+    agent.repetition = Repetition()
+    agent.audit = type("A", (), {
+        "write": lambda self, kind, **fields: written.append((kind, fields))
+    })()
+    agent.session = Session()
+    agent.stop_requested = type("E", (), {"is_set": lambda self: False})()
+    agent.desktop = agent.policy = None
+    agent._emit = lambda kind, payload: None
+    agent._yield_to_human = lambda name: None
+    agent._tool_context = lambda: None
+    agent._is_acting = lambda name: False
+
+    call = ToolCall("1", "ui_click", {"ref": 5})
+    for _ in range(REFUSE_AT + 1):
+        agent._run_tools([call], 1)
+
+    refusals = [fields for kind, fields in written if kind == "refused_repeat"]
+    assert refusals, "the guard fired but recorded nothing"
+    assert refusals[0].get("reason"), "a saved turn nobody can count cannot be defended"
